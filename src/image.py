@@ -95,16 +95,3 @@ class ImageConstruct:
         plt.axis("off")
         plt.show()
 
-imagepath = 'D:/project/AphanesKyma/src/buet.jpg'
-test = Image(imagepath)
-print(test.x)
-print('\n')
-print(test.y)
-test.show()
-
-test2 = ImageConstruct([[0,0.3,0.6,0.9],
-                        [.15,0.3,0.6,0.9],
-                        [.3,0.3,0.2,1],
-                        [.5,0.2,0.6,0.8],
-                        [.6,0.3,0.9,0]])
-test2.show(cmap='plasma')
