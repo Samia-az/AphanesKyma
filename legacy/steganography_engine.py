@@ -4,6 +4,7 @@ from crypto import CryptoManager
 from payload import PayloadManager
 from image_payload import ImagePayloadManager
 from dct_steganography import DCTSteganographer
+from fft_steganography import FFTSteganographer
 
 
 class SteganographyEngine:
@@ -11,7 +12,8 @@ class SteganographyEngine:
 
     def __init__(
         self,
-        quantization_step=8
+        quantization_step=8,
+        method="dct"
     ):
 
         self.crypto = (
@@ -26,11 +28,24 @@ class SteganographyEngine:
             ImagePayloadManager()
         )
 
-        self.dct = (
-            DCTSteganographer(
-                quantization_step
+        self.method = method
+
+        # NOTE: kept as self.dct (not self.embedder) so every other
+        # call site below (self.dct.load_image, self.dct.embed_bits,
+        # etc.) stays untouched regardless of which backend is
+        # selected here.
+        if method == "fft":
+            self.dct = (
+                FFTSteganographer(
+                    quantization_step
+                )
             )
-        )
+        else:
+            self.dct = (
+                DCTSteganographer(
+                    quantization_step
+                )
+            )
 
 
     # ==================================================
