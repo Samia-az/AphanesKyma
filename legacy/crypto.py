@@ -1,87 +1,129 @@
 import os
+from hashlib import sha256
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
 
 
-# --------------------------------
-# Generate encryption key
-# --------------------------------
+class CryptoManager:
 
-def generate_key(password, salt):
+    SALT_SIZE = 16
+    NONCE_SIZE = 12
 
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=salt,
-        iterations=600000
-    )
+    def _create_key(self, password, salt):
 
-    key = kdf.derive(password.encode("utf-8"))
+        password_bytes = password.encode("utf-8")
 
-    return key
+        return sha256(
+            password_bytes + salt
+        ).digest()
 
 
-# --------------------------------
-# Encrypt message
-# --------------------------------
+    # =========================================
+    # Encrypt bytes
+    # =========================================
 
-def encrypt_message(message, password):
+    def encrypt_bytes(self, data, password):
 
-    # Random salt
-    salt = os.urandom(16)
+        salt = os.urandom(
+            self.SALT_SIZE
+        )
 
-    # Generate AES key
-    key = generate_key(password, salt)
+        key = self._create_key(
+            password,
+            salt
+        )
 
-    # AES-GCM
-    aes = AESGCM(key)
+        nonce = os.urandom(
+            self.NONCE_SIZE
+        )
 
-    # Random nonce
-    nonce = os.urandom(12)
+        aes = AESGCM(key)
 
-    # Convert message to bytes
-    message_bytes = message.encode("utf-8")
+        ciphertext = aes.encrypt(
+            nonce,
+            data,
+            None
+        )
 
-    # Encrypt
-    ciphertext = aes.encrypt(
-        nonce,
-        message_bytes,
-        None
-    )
-
-    # Return everything needed for decryption
-    return salt + nonce + ciphertext
+        # salt + nonce + ciphertext
+        return (
+            salt
+            + nonce
+            + ciphertext
+        )
 
 
-# --------------------------------
-# Decrypt message
-# --------------------------------
+    # =========================================
+    # Decrypt bytes
+    # =========================================
 
-def decrypt_message(encrypted_data, password):
+    def decrypt_bytes(
+        self,
+        encrypted_data,
+        password
+    ):
 
-    # Extract salt
-    salt = encrypted_data[:16]
+        if len(encrypted_data) < 28:
 
-    # Extract nonce
-    nonce = encrypted_data[16:28]
+            raise ValueError(
+                "Encrypted data is invalid."
+            )
 
-    # Extract ciphertext
-    ciphertext = encrypted_data[28:]
+        salt = encrypted_data[:16]
 
-    # Generate same AES key
-    key = generate_key(password, salt)
+        nonce = encrypted_data[16:28]
 
-    # AES-GCM
-    aes = AESGCM(key)
+        ciphertext = encrypted_data[28:]
 
-    # Decrypt
-    plaintext = aes.decrypt(
-        nonce,
-        ciphertext,
-        None
-    )
+        key = self._create_key(
+            password,
+            salt
+        )
 
-    # Convert bytes → string
-    return plaintext.decode("utf-8")
+        aes = AESGCM(key)
+
+        return aes.decrypt(
+            nonce,
+            ciphertext,
+            None
+        )
+
+
+    # =========================================
+    # Encrypt text
+    # =========================================
+
+    def encrypt_text(
+        self,
+        message,
+        password
+    ):
+
+        data = message.encode(
+            "utf-8"
+        )
+
+        return self.encrypt_bytes(
+            data,
+            password
+        )
+
+
+    # =========================================
+    # Decrypt text
+    # =========================================
+
+    def decrypt_text(
+        self,
+        encrypted_data,
+        password
+    ):
+
+        data = self.decrypt_bytes(
+            encrypted_data,
+            password
+        )
+
+        return data.decode(
+            "utf-8"
+        )
