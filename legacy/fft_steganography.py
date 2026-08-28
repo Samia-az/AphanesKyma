@@ -5,28 +5,10 @@ from PIL import Image
 
 
 class FFTSteganographer:
-    """
-    FFT-based counterpart to DCTSteganographer.
-
-    Same block-wise QIM idea, but applied to the 2D FFT of each block
-    instead of the DCT. The key difference: FFT coefficients are
-    complex, and for a real image the spectrum has conjugate symmetry
-    (F[r, c] == conj(F[-r mod N, -c mod N])). If we only touch one
-    coefficient of a conjugate pair, the inverse FFT stops being real
-    and we bake extra noise into the pixels. So every embed also
-    writes the mirror coefficient as the exact conjugate of the new
-    value, which keeps the block real after ifft2.
-
-    QIM is applied to the coefficient's magnitude; phase is left
-    untouched.
-    """
+    
 
     BLOCK_SIZE = 8
 
-    # Same mid-frequency positions used by DCTSteganographer. None of
-    # these are self-conjugate (that would require r,c in {0, 4}) and
-    # none is another position's mirror, so each position is an
-    # independent bit slot.
     EMBED_POSITIONS = [
         (1, 2),
         (1, 3),
@@ -38,10 +20,6 @@ class FFTSteganographer:
         (3, 3),
     ]
 
-    # FFT-magnitude embedding tends to be noisier per unit of PSNR
-    # than DCT-QIM (you're perturbing magnitude directly, and phase
-    # carries most of the perceptual structure). Start smaller than
-    # the DCT default and raise it only if extraction is unreliable.
     QUANTIZATION_STEP = 8
 
     def __init__(self, quantization_step=None):
