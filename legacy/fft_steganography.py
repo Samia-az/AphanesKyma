@@ -62,9 +62,7 @@ class FFTSteganographer:
         return np.fft.fft2(block)
 
     def apply_ifft(self, coefficients):
-        # .real drops the (ideally near-zero) residual imaginary part
-        # left over from floating-point rounding once symmetry has
-        # been enforced.
+        
         return np.fft.ifft2(coefficients).real
 
     # ==================================================

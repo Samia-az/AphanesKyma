@@ -30,10 +30,6 @@ class SteganographyEngine:
 
         self.method = method
 
-        # NOTE: kept as self.dct (not self.embedder) so every other
-        # call site below (self.dct.load_image, self.dct.embed_bits,
-        # etc.) stays untouched regardless of which backend is
-        # selected here.
         if method == "fft":
             self.dct = (
                 FFTSteganographer(
