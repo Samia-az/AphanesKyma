@@ -7,13 +7,6 @@ from steganography_engine import SteganographyEngine
 # PROJECT DIRECTORY
 # ==================================================
 
-# test_text.py is already inside:
-#
-# AphanesKyma/
-#     legacy/
-#         test_text.py
-#
-# Therefore .parent gives us the legacy folder.
 
 BASE_DIR = Path(__file__).resolve().parent
 
