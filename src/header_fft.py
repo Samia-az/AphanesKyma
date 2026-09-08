@@ -3,17 +3,19 @@ header_fft.py
 -------------
 Self-describing header for the row-wise FFT image<->audio scheme.
 
-Embeds n_rows / n_cols into a fixed-length header frame at the start of
-the audio, protected with Hamming(7,4), so a decoder that only has the
-.wav file (no access to the original image) can still figure out how
-to parse the rest of the audio -- and can survive some bit noise while
-doing so.
+Embeds n_rows / n_cols / audio_mode into a fixed-length header frame at
+the start of the audio, protected with Hamming(7,4), so a decoder that
+only has the .wav file (no access to the original image, and no
+database) can still figure out how to parse the rest of the audio AND
+which fidelity/listenability preset was used to encode it -- and can
+survive some bit noise while doing so.
 """
 
 import numpy as np
 
-HEADER_FRAME_LEN = 512          # fixed , known
+HEADER_FRAME_LEN = 512          # fixed & known by both encoder/decoder
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
+HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
 HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
 
 # --------------------------------------------------------------------------
@@ -98,17 +100,18 @@ def bits_to_int(bits):
 # Header <-> audio frame
 # --------------------------------------------------------------------------
 
-def make_header_frame(n_rows, n_cols, on_amplitude=40.0):
+def make_header_frame(n_rows, n_cols, mode_id=0, on_amplitude=40.0):
     """
     Build the time-domain header frame (length HEADER_FRAME_LEN) that
-    encodes n_rows and n_cols, Hamming-protected, as an on/off pattern
-    across frequency bins.
+    encodes n_rows, n_cols, and mode_id, Hamming-protected, as an
+    on/off pattern across frequency bins.
     """
     bits = np.concatenate([
         int_to_bits(n_rows, HEADER_BITS_PER_VALUE),
         int_to_bits(n_cols, HEADER_BITS_PER_VALUE),
+        int_to_bits(mode_id, HEADER_MODE_BITS),
     ])
-    coded = bits_to_hamming_stream(bits)  # 32 bits -> 56 coded bits
+    coded = bits_to_hamming_stream(bits)
 
     if len(coded) > HEADER_N_COLS:
         raise ValueError("Header doesn't fit in HEADER_FRAME_LEN; increase it.")
@@ -124,21 +127,105 @@ def make_header_frame(n_rows, n_cols, on_amplitude=40.0):
 def read_header_frame(frame, threshold_ratio=0.5):
     """
     Given the first HEADER_FRAME_LEN samples of audio, recover
-    (n_rows, n_cols), correcting up to 1 bit of noise per 7-bit chunk.
+    (n_rows, n_cols, mode_id), correcting up to 1 bit of noise per
+    7-bit chunk.
     """
     spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
     magnitude = np.abs(spectrum)
 
-    n_coded_bits = 2 * ((HEADER_BITS_PER_VALUE + 3) // 4) * 7  # bits per value padded to x4, *7 for hamming
+    total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS
+    n_chunks = -(-total_data_bits // 4)  # ceil division: chunks of 4 data bits
+    n_coded_bits = n_chunks * 7
     coded_region = magnitude[:n_coded_bits]
 
     thresh = coded_region.max() * threshold_ratio if coded_region.max() > 0 else 0
     coded_bits = (coded_region > thresh).astype(int)
 
-    bits = hamming_stream_to_bits(coded_bits, 2 * HEADER_BITS_PER_VALUE)
+    bits = hamming_stream_to_bits(coded_bits, n_chunks * 4)
     n_rows = bits_to_int(bits[:HEADER_BITS_PER_VALUE])
-    n_cols = bits_to_int(bits[HEADER_BITS_PER_VALUE:])
-    return n_rows, n_cols
+    n_cols = bits_to_int(bits[HEADER_BITS_PER_VALUE:2 * HEADER_BITS_PER_VALUE])
+    mode_id = bits_to_int(bits[2 * HEADER_BITS_PER_VALUE:2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS])
+    return n_rows, n_cols, mode_id
+
+
+# --------------------------------------------------------------------------
+# Audio presets: fidelity <-> listenability trade-off
+# --------------------------------------------------------------------------
+# Each preset is a FIXED, hardcoded recipe (not per-file data), so the
+# decoder only needs to know which preset id was used (4 bits, embedded
+# in the header above) to reconstruct the exact same weighting/sparsify
+# behavior -- nothing about the preset itself needs to be stored anywhere.
+#
+# A cutoff-based low-pass on the COLUMN axis doesn't behave like a real
+# image blur here -- in this scheme, column index IS the audio frequency
+# bin (they're literally the same axis, not two separate domains, since
+# the row's pixel values are used directly as magnitude with no prior
+# spatial-frequency transform). Zeroing "high frequency" columns is
+# therefore identical to cropping off the right side of the image, not
+# blurring it -- which is why very_listenable showed a shrinking black
+# crop rather than a soft/blurred image.
+#
+# To get an actual blur (same width, reduced fine detail, low-frequency
+# structure preserved) we smooth each row with a moving-average filter
+# BEFORE it's used as magnitude -- this reduces sharp column-to-column
+# jumps (which is also what makes the audio sound harsh) while keeping
+# every column populated, so nothing gets cropped away.
+
+AUDIO_PRESETS = {
+    0: dict(name='fidelity',        rolloff=0.0, floor=1.00, blur_fraction=None),
+    1: dict(name='balanced',        rolloff=1.5, floor=0.10, blur_fraction=0.05),
+    2: dict(name='listenable',      rolloff=3.0, floor=0.03, blur_fraction=0.15),
+    3: dict(name='very_listenable', rolloff=4.0, floor=0.02, blur_fraction=0.30),
+}
+
+
+def _make_weight_curve(n_cols, rolloff, floor):
+    k = np.arange(n_cols)
+    norm_k = k / max(1, n_cols - 1)
+    curve = (1 - norm_k) ** rolloff
+    curve = curve * (1 - floor) + floor
+    return curve
+
+
+def _blur_rows(image, blur_fraction):
+    """Smooth each row with a moving-average filter (kernel width scales
+    with n_cols) -- reduces fine detail/harsh column-to-column jumps
+    while keeping every column populated (a real blur, not a crop)."""
+    if blur_fraction is None:
+        return image
+    n_cols = image.shape[1]
+    kernel_size = max(1, int(round(blur_fraction * n_cols)))
+    if kernel_size <= 1:
+        return image
+    kernel = np.ones(kernel_size) / kernel_size
+    out = np.zeros_like(image)
+    for r in range(image.shape[0]):
+        out[r] = np.convolve(image[r], kernel, mode='same')
+    return out
+
+
+def apply_preset(image, mode_id):
+    """Apply a named preset's weighting + row-blur to an image, ready to
+    be passed into image_to_audio(). Returns (processed_image,
+    weight_curve) -- weight_curve is needed again at decode time to
+    invert the weighting (the blur has no separate inverse; it's simply
+    the accepted lossy trade-off of that preset)."""
+    preset = AUDIO_PRESETS[mode_id]
+    n_cols = image.shape[1]
+    weight = _make_weight_curve(n_cols, preset['rolloff'], preset['floor'])
+    blurred = _blur_rows(image, preset['blur_fraction'])
+    weighted = blurred * weight[np.newaxis, :]
+    return weighted, weight
+
+
+def invert_preset(recovered_image, mode_id):
+    """Undo a preset's weighting on a decoded image. n_cols is inferred
+    from the recovered image's own shape (already known from the header
+    by the time this is called)."""
+    n_cols = recovered_image.shape[1]
+    preset = AUDIO_PRESETS[mode_id]
+    weight = _make_weight_curve(n_cols, preset['rolloff'], preset['floor'])
+    return recovered_image / weight[np.newaxis, :]
 
 
 # --------------------------------------------------------------------------
@@ -148,14 +235,29 @@ def read_header_frame(frame, threshold_ratio=0.5):
 from image_audio_fft import image_to_audio, audio_to_image  # noqa: E402
 
 
-def image_to_audio_with_header(image, phase_seed=0):
+def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
     """
     Encode image -> audio, prepending a Hamming-protected header frame
-    that records (n_rows, n_cols) so the audio is fully self-describing.
+    that records (n_rows, n_cols, mode) so the audio is fully
+    self-describing -- including which fidelity/listenability preset
+    was used, so nothing needs to be stored externally (no DB required).
+
+    Parameters
+    ----------
+    mode : str or int
+        One of AUDIO_PRESETS' names ('fidelity', 'balanced',
+        'listenable', 'very_listenable') or its integer id.
     """
+    if isinstance(mode, str):
+        mode_id = next(i for i, p in AUDIO_PRESETS.items() if p['name'] == mode)
+    else:
+        mode_id = mode
+
     n_rows, n_cols = image.shape
-    header = make_header_frame(n_rows, n_cols)
-    data_audio, frame_len = image_to_audio(image, phase_seed=phase_seed)
+    processed_image, _weight = apply_preset(image, mode_id)
+
+    header = make_header_frame(n_rows, n_cols, mode_id)
+    data_audio, frame_len = image_to_audio(processed_image, phase_seed=phase_seed)
     full_audio = np.concatenate([header, data_audio])
 
     peak = np.max(np.abs(full_audio))
@@ -167,12 +269,16 @@ def image_to_audio_with_header(image, phase_seed=0):
 def audio_with_header_to_image(audio):
     """
     Decode audio -> image using only what's embedded in the audio itself
-    (no external knowledge of the original image's shape needed).
+    (no external knowledge of the original image's shape OR the encoding
+    preset needed -- both are recovered from the header).
     """
     header_frame = audio[:HEADER_FRAME_LEN]
-    n_rows, n_cols = read_header_frame(header_frame)
+    n_rows, n_cols, mode_id = read_header_frame(header_frame)
     frame_len = 2 * (n_cols - 1)
 
     data_audio = audio[HEADER_FRAME_LEN:]
-    image = audio_to_image(data_audio, frame_len, n_rows=n_rows)
-    return image, n_rows, n_cols
+    recovered = audio_to_image(data_audio, frame_len, n_rows=n_rows)
+    image = invert_preset(recovered, mode_id)
+
+    mode_name = AUDIO_PRESETS.get(mode_id, {}).get('name', f'unknown({mode_id})')
+    return image, n_rows, n_cols, mode_name

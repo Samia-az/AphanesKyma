@@ -3,7 +3,7 @@ import numpy as np
 from image import *
 # image to audio
 
-def image_to_audio(image, sample_rate = 44100, hop = None, phase_seed = 0, window = None):
+def image_to_audio(image, sample_rate = 44100, hop = None, phase_seed = 0, window = None, phase_mode = 'fixed'):
     image = np.asarray(image, dtype= np.float64)
     n_rows, n_cols = image.shape
     frm_len = 2 * (n_cols -1)
@@ -17,9 +17,14 @@ def image_to_audio(image, sample_rate = 44100, hop = None, phase_seed = 0, windo
     if window is None:
         window = np.ones(frm_len)
 
+    fixed_phase = rng.uniform(-np.pi, np.pi, size = n_cols)
+
     for i in range(n_rows):
         magnitude = image[i]
-        phase = rng.uniform(-np.pi, np.pi, size = n_cols)
+        if phase_mode == 'fixed':
+            phase = fixed_phase
+        else :
+            phase = rng.uniform(-np.pi, np.pi, size = n_cols)
         spectrum = magnitude * np.exp(1j*phase)
         frame = np.fft.irfft(spectrum, n= frm_len)
         frame = frame * window
@@ -33,7 +38,7 @@ def image_to_audio(image, sample_rate = 44100, hop = None, phase_seed = 0, windo
 
     peak = np.max(np.abs(audio))
     if peak>0:
-        audio = audio.peak
+        audio = audio/peak
 
     return audio, frm_len
 
