@@ -9,6 +9,7 @@ from image_audio_fft import *
 from header_fft import *
 
 imagepath = 'D:/project/AphanesKyma/src/buet.jpg'
+imagepath = 'D:/project/AphanesKyma/src/autumn-leaves.jpg'
 # test = Image(imagepath)
 # print(test.x)
 # print('\n')
@@ -55,17 +56,17 @@ else:
 
 mag_img = normalize_image_to_magnitude(img_gray)
 
-audio = image_to_audio_with_header(mag_img, mode = 'very_listenable')
+audio = image_to_audio_with_header(mag_img, mode = 'fidelity')
 # mode options: 'fidelity', 'balanced', 'listenable', 'very_listenable'
 
-print('audio length: ',len(audio),'durtion sec: ',len(audio)/44100)
+print('audio length: ',len(audio),'durtion sec: ',len(audio)/22000)
 
 
 audio_int16 = (audio * 32767 * 0.9).astype(np.int16)
 with wave.open('D:/project/AphanesKyma/src/buet_audio.wav', 'w') as wf:
     wf.setnchannels(1)
     wf.setsampwidth(2)
-    wf.setframerate(44100)
+    wf.setframerate(22000)
     wf.writeframes(audio_int16.tobytes())
  
 # reconstruct back from the freshly-generated audio to verify it round-trips

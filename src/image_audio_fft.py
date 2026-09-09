@@ -3,7 +3,7 @@ import numpy as np
 from image import *
 # image to audio
 
-def image_to_audio(image, sample_rate = 44100, hop = None, phase_seed = 0, window = None, phase_mode = 'fixed'):
+def image_to_audio(image, sample_rate = 22000, hop = None, phase_seed = 0, window = None, phase_mode = 'fixed'):
     image = np.asarray(image, dtype= np.float64)
     n_rows, n_cols = image.shape
     frm_len = 2 * (n_cols -1)

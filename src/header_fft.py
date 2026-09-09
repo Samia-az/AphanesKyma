@@ -4,22 +4,18 @@ header_fft.py
 Self-describing header for the row-wise FFT image<->audio scheme.
 
 Embeds n_rows / n_cols / audio_mode into a fixed-length header frame at
-the start of the audio, protected with Hamming(7,4), so a decoder that
-only has the .wav file (no access to the original image, and no
-database) can still figure out how to parse the rest of the audio AND
-which fidelity/listenability preset was used to encode it -- and can
-survive some bit noise while doing so.
+the start of the audio, protected with Hamming(7,4)
 """
 
 import numpy as np
 
-HEADER_FRAME_LEN = 512          # fixed & known by both encoder/decoder
+HEADER_FRAME_LEN = 512          # fixed & known 
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
 HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
 HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
 
 # --------------------------------------------------------------------------
-# Hamming(7,4): protects 4 data bits with 3 parity bits, corrects 1-bit errors
+# Hamming(7,4)
 # --------------------------------------------------------------------------
 
 _G = np.array([  # generator matrix (4 data bits -> 7 coded bits)
@@ -118,7 +114,7 @@ def make_header_frame(n_rows, n_cols, mode_id=0, on_amplitude=40.0):
 
     magnitude = np.zeros(HEADER_N_COLS)
     magnitude[:len(coded)] = coded * on_amplitude
-    # zero phase for the header keeps it simple/deterministic
+
     spectrum = magnitude.astype(np.complex128)
     frame = np.fft.irfft(spectrum, n=HEADER_FRAME_LEN)
     return frame
@@ -134,7 +130,7 @@ def read_header_frame(frame, threshold_ratio=0.5):
     magnitude = np.abs(spectrum)
 
     total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS
-    n_chunks = -(-total_data_bits // 4)  # ceil division: chunks of 4 data bits
+    n_chunks = -(-total_data_bits // 4)  
     n_coded_bits = n_chunks * 7
     coded_region = magnitude[:n_coded_bits]
 
@@ -149,41 +145,50 @@ def read_header_frame(frame, threshold_ratio=0.5):
 
 
 # --------------------------------------------------------------------------
-# Audio presets: fidelity <-> listenability trade-off
+# Audio presets
 # --------------------------------------------------------------------------
 # Each preset is a FIXED, hardcoded recipe (not per-file data), so the
 # decoder only needs to know which preset id was used (4 bits, embedded
 # in the header above) to reconstruct the exact same weighting/sparsify
 # behavior -- nothing about the preset itself needs to be stored anywhere.
-#
-# A cutoff-based low-pass on the COLUMN axis doesn't behave like a real
-# image blur here -- in this scheme, column index IS the audio frequency
-# bin (they're literally the same axis, not two separate domains, since
-# the row's pixel values are used directly as magnitude with no prior
-# spatial-frequency transform). Zeroing "high frequency" columns is
-# therefore identical to cropping off the right side of the image, not
-# blurring it -- which is why very_listenable showed a shrinking black
-# crop rather than a soft/blurred image.
-#
-# To get an actual blur (same width, reduced fine detail, low-frequency
-# structure preserved) we smooth each row with a moving-average filter
-# BEFORE it's used as magnitude -- this reduces sharp column-to-column
-# jumps (which is also what makes the audio sound harsh) while keeping
-# every column populated, so nothing gets cropped away.
+
 
 AUDIO_PRESETS = {
-    0: dict(name='fidelity',        rolloff=0.0, floor=1.00, blur_fraction=None),
-    1: dict(name='balanced',        rolloff=1.5, floor=0.10, blur_fraction=0.05),
-    2: dict(name='listenable',      rolloff=3.0, floor=0.03, blur_fraction=0.15),
-    3: dict(name='very_listenable', rolloff=4.0, floor=0.02, blur_fraction=0.30),
+    0: dict(name='fidelity',        strength=0.0, floor=1.00, blur_fraction=None),
+    1: dict(name='balanced',        strength=0.6, floor=0.10, blur_fraction=0.05),
+    2: dict(name='listenable',      strength=1.0, floor=0.03, blur_fraction=0.15),
+    3: dict(name='very_listenable', strength=1.3, floor=0.02, blur_fraction=0.30),
 }
 
 
-def _make_weight_curve(n_cols, rolloff, floor):
-    k = np.arange(n_cols)
-    norm_k = k / max(1, n_cols - 1)
-    curve = (1 - norm_k) ** rolloff
-    curve = curve * (1 - floor) + floor
+def _a_weighting_gain_db(freq_hz):
+    """Standard A-weighting curve (IEC 61672) -- approximates relative
+    human hearing sensitivity across frequency. Higher = ear is more
+    sensitive there (peaks around 2-5 kHz)."""
+    f = np.maximum(freq_hz, 1e-6)
+    f2 = f ** 2
+    ra = (12194 ** 2 * f2 ** 2) / (
+        (f2 + 20.6 ** 2) * np.sqrt((f2 + 107.7 ** 2) * (f2 + 737.9 ** 2)) * (f2 + 12194 ** 2)
+    )
+    return 20 * np.log10(ra) + 2.00
+
+
+def _make_weight_curve(n_cols, strength, floor, sample_rate=44100):
+    """Build a per-bin attenuation curve that de-emphasizes frequencies
+    the human ear is most sensitive to, rather than a blind rolloff.
+    `strength` scales how aggressively sensitive frequencies are
+    attenuated (0 = no weighting/flat, larger = stronger de-emphasis).
+    `floor` sets a minimum gain so no bin is fully silenced (keeps the
+    curve invertible without dividing by zero)."""
+    if strength == 0.0 and floor == 1.00:
+        return np.ones(n_cols)
+    frame_len = 2 * (n_cols - 1)
+    freqs = np.arange(n_cols) * sample_rate / frame_len
+    a_db = _a_weighting_gain_db(freqs)
+    sensitivity = 10 ** (a_db / 20)          # relative ear sensitivity
+    curve = 1.0 / np.maximum(sensitivity, 1e-3) ** strength
+    curve = curve / curve.max()              # normalize to a 0..1 range
+    curve = curve * (1 - floor) + floor      # apply floor so nothing hits exactly 0
     return curve
 
 
@@ -212,7 +217,7 @@ def apply_preset(image, mode_id):
     the accepted lossy trade-off of that preset)."""
     preset = AUDIO_PRESETS[mode_id]
     n_cols = image.shape[1]
-    weight = _make_weight_curve(n_cols, preset['rolloff'], preset['floor'])
+    weight = _make_weight_curve(n_cols, preset['strength'], preset['floor'])
     blurred = _blur_rows(image, preset['blur_fraction'])
     weighted = blurred * weight[np.newaxis, :]
     return weighted, weight
@@ -224,7 +229,7 @@ def invert_preset(recovered_image, mode_id):
     by the time this is called)."""
     n_cols = recovered_image.shape[1]
     preset = AUDIO_PRESETS[mode_id]
-    weight = _make_weight_curve(n_cols, preset['rolloff'], preset['floor'])
+    weight = _make_weight_curve(n_cols, preset['strength'], preset['floor'])
     return recovered_image / weight[np.newaxis, :]
 
 
