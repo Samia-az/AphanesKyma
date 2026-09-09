@@ -13,6 +13,8 @@ HEADER_FRAME_LEN = 512          # fixed & known
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
 HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
 HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
+HEADER_REPEATS = 3              
+HEADER_AMPLITUDE_SCALE = 0.35   
 
 # --------------------------------------------------------------------------
 # Hamming(7,4)
@@ -228,27 +230,22 @@ def invert_preset(recovered_image, mode_id):
     from the recovered image's own shape (already known from the header
     by the time this is called)."""
     n_cols = recovered_image.shape[1]
-    preset = AUDIO_PRESETS[mode_id]
+    preset = AUDIO_PRESETS.get(mode_id, AUDIO_PRESETS[0])
     weight = _make_weight_curve(n_cols, preset['strength'], preset['floor'])
     return recovered_image / weight[np.newaxis, :]
 
 
 # --------------------------------------------------------------------------
-# Full pipeline: image -> self-describing audio -> image
+# Full pipeline
 # --------------------------------------------------------------------------
 
-from image_audio_fft import image_to_audio, audio_to_image  # noqa: E402
+from image_audio_fft import image_to_audio, audio_to_image 
 
 
 def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
     """
-    Encode image -> audio, prepending a Hamming-protected header frame
-    that records (n_rows, n_cols, mode) so the audio is fully
-    self-describing -- including which fidelity/listenability preset
-    was used, so nothing needs to be stored externally (no DB required).
+    Encode image -> audio
 
-    Parameters
-    ----------
     mode : str or int
         One of AUDIO_PRESETS' names ('fidelity', 'balanced',
         'listenable', 'very_listenable') or its integer id.
@@ -263,7 +260,25 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
 
     header = make_header_frame(n_rows, n_cols, mode_id)
     data_audio, frame_len = image_to_audio(processed_image, phase_seed=phase_seed)
-    full_audio = np.concatenate([header, data_audio])
+
+    # Rebalance the header's amplitude relative to the data audio's peak
+    # (see HEADER_AMPLITUDE_SCALE above for why this specific value, and
+    # why it can't simply be "as loud as possible" or "as quiet as
+    # possible" -- it trades off AWGN robustness against clipping
+    # robustness).
+    header_peak = np.abs(header).max()
+    data_peak = np.abs(data_audio).max()
+    if header_peak > 0 and data_peak > 0:
+        header = header * (data_peak / header_peak) * HEADER_AMPLITUDE_SCALE
+
+    # Repeat the header HEADER_REPEATS times. Each copy is decoded
+    # independently at read time and the results are majority-voted --
+    # a second, independent layer of protection on top of Hamming(7,4),
+    # since the header is still proportionally more exposed to
+    # amplitude-based noise than the rest of the signal even after
+    # rebalancing (a short, sparse pattern has more of its own samples
+    # sitting near peak amplitude than the spread-out data audio does).
+    full_audio = np.concatenate([header] * HEADER_REPEATS + [data_audio])
 
     peak = np.max(np.abs(full_audio))
     if peak > 0:
@@ -277,13 +292,49 @@ def audio_with_header_to_image(audio):
     (no external knowledge of the original image's shape OR the encoding
     preset needed -- both are recovered from the header).
     """
-    header_frame = audio[:HEADER_FRAME_LEN]
-    n_rows, n_cols, mode_id = read_header_frame(header_frame)
-    frame_len = 2 * (n_cols - 1)
+    n_rows, n_cols, mode_id = _read_header_majority_vote(audio)
 
-    data_audio = audio[HEADER_FRAME_LEN:]
+    # Sanity-check the recovered header values -- under severe noise the
+    # header can decode to a nonsensical n_cols/n_rows (e.g. because the
+    # Hamming code corrected the wrong bit for a multi-bit error it
+    # can't actually fix). Rather than attempt to process garbage
+    # dimensions (which can be extremely slow or fail deep inside
+    # numpy), fail clearly here so the caller knows this noise severity
+    # exceeded what the header could survive.
+    max_frame_len = len(audio)  # can't have a frame longer than the audio itself
+    if n_cols < 2 or 2 * (n_cols - 1) > max_frame_len or n_rows < 1 or n_rows > 100000:
+        raise ValueError(
+            f"Header could not be reliably recovered (decoded n_rows={n_rows}, "
+            f"n_cols={n_cols}) -- noise severity likely exceeded what the "
+            f"header's error correction can survive."
+        )
+
+    frame_len = 2 * (n_cols - 1)
+    data_audio = audio[HEADER_FRAME_LEN * HEADER_REPEATS:]
     recovered = audio_to_image(data_audio, frame_len, n_rows=n_rows)
     image = invert_preset(recovered, mode_id)
 
     mode_name = AUDIO_PRESETS.get(mode_id, {}).get('name', f'unknown({mode_id})')
     return image, n_rows, n_cols, mode_name
+
+
+def _read_header_majority_vote(audio):
+    """Read all HEADER_REPEATS copies of the header, decode each
+    independently, and majority-vote each field. This survives noise
+    that badly corrupts one or two copies (e.g. clipping, which hits
+    the header harder than the data audio) as long as a majority of
+    copies still decode correctly."""
+    from collections import Counter
+
+    votes_rows, votes_cols, votes_mode = [], [], []
+    for i in range(HEADER_REPEATS):
+        segment = audio[i * HEADER_FRAME_LEN:(i + 1) * HEADER_FRAME_LEN]
+        n_rows, n_cols, mode_id = read_header_frame(segment)
+        votes_rows.append(n_rows)
+        votes_cols.append(n_cols)
+        votes_mode.append(mode_id)
+
+    n_rows = Counter(votes_rows).most_common(1)[0][0]
+    n_cols = Counter(votes_cols).most_common(1)[0][0]
+    mode_id = Counter(votes_mode).most_common(1)[0][0]
+    return n_rows, n_cols, mode_id

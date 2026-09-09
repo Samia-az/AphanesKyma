@@ -7,9 +7,10 @@ from image import *
 from DFT2D import *
 from image_audio_fft import *
 from header_fft import *
+from noise_simulation import *
 
 imagepath = 'D:/project/AphanesKyma/src/buet.jpg'
-imagepath = 'D:/project/AphanesKyma/src/autumn-leaves.jpg'
+# imagepath = 'D:/project/AphanesKyma/src/autumn-leaves.jpg'
 # test = Image(imagepath)
 # print(test.x)
 # print('\n')
@@ -56,7 +57,7 @@ else:
 
 mag_img = normalize_image_to_magnitude(img_gray)
 
-audio = image_to_audio_with_header(mag_img, mode = 'fidelity')
+audio = image_to_audio_with_header(mag_img, mode = 'very_listenable')
 # mode options: 'fidelity', 'balanced', 'listenable', 'very_listenable'
 
 print('audio length: ',len(audio),'durtion sec: ',len(audio)/22000)
@@ -68,9 +69,11 @@ with wave.open('D:/project/AphanesKyma/src/buet_audio.wav', 'w') as wf:
     wf.setsampwidth(2)
     wf.setframerate(22000)
     wf.writeframes(audio_int16.tobytes())
- 
+
+# simulate noise using one from['none', 'awgn', 'clipping', 'dropout', 'bandlimit']
+noisy_audio = apply_noise(audio, noise_type='clipping',severity= 0.5)
 # reconstruct back from the freshly-generated audio to verify it round-trips
-recon,nrows, ncols,mode_used = audio_with_header_to_image(audio)
+recon,nrows, ncols,mode_used = audio_with_header_to_image(noisy_audio)
 recon_img = magnitude_to_image_uint8(recon)
 print(f"reconstructed with ({nrows}, {ncols}) , mode = {mode_used}")
  
