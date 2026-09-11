@@ -31,10 +31,11 @@ class DCTSteganographer:
     ]
 
     # --------------------------------------------------
-    # Larger value = stronger embedding
+    # Larger value = stronger / more robust embedding
     # Smaller value = better visual quality
     #
-    # Start with 16.
+    # 16 is the minimum safe value to survive the
+    # uint8 round-trip without bit-flip errors.
     # --------------------------------------------------
 
     QUANTIZATION_STEP = 16
@@ -355,6 +356,11 @@ class DCTSteganographer:
             ).copy()
         )
 
+        # ------------------------------------------------
+        # Prevent IDCT clipping on high-contrast images
+        # by compressing pixel range from [0, 255] to [16, 239]
+        # ------------------------------------------------
+        image_array = 16.0 + (image_array / 255.0) * (239.0 - 16.0)
 
         height, width = (
             image_array.shape

@@ -47,6 +47,11 @@ def fit_cover_to_capacity(
         needed_bits / bits_per_block
     )
 
+    # Apply a 1.25× safety margin (so payload only uses ~80% of
+    # capacity).  This leaves breathing room for DCT round-trip
+    # errors caused by uint8 pixel clamping in high-contrast images.
+    needed_blocks = math.ceil(needed_blocks * 1.25)
+
     aspect = width / height
 
     blocks_h_needed = math.ceil(

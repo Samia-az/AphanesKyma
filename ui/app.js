@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initPayloadSwitcher();
   initPasswordToggles();
   initPasswordStrength();
-  initEncodeDecodePipelines();
+  initPipelines();
 });
 
 // ── Navigation ──────────────────────────────────────────────────
@@ -39,7 +39,7 @@ function initCanvasAnimation() {
   const canvas = document.getElementById('bg-canvas');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  
+
   let width, height;
   let particles = [];
 
@@ -47,7 +47,7 @@ function initCanvasAnimation() {
     width = canvas.width = window.innerWidth;
     height = canvas.height = window.innerHeight;
   }
-  
+
   window.addEventListener('resize', resize);
   resize();
 
@@ -78,30 +78,25 @@ function initCanvasAnimation() {
 
   function animate() {
     ctx.clearRect(0, 0, width, height);
-    particles.forEach(p => {
-      p.update();
-      p.draw();
-    });
-    
-    // Draw lines
+    particles.forEach(p => { p.update(); p.draw(); });
+
     for (let i = 0; i < particles.length; i++) {
       for (let j = i; j < particles.length; j++) {
         const dx = particles[i].x - particles[j].x;
         const dy = particles[i].y - particles[j].y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        
         if (dist < 100) {
           ctx.beginPath();
           ctx.moveTo(particles[i].x, particles[i].y);
           ctx.lineTo(particles[j].x, particles[j].y);
-          ctx.strokeStyle = `rgba(255, 255, 255, ${0.1 - dist/1000})`;
+          ctx.strokeStyle = `rgba(255, 255, 255, ${0.1 - dist / 1000})`;
           ctx.stroke();
         }
       }
     }
     requestAnimationFrame(animate);
   }
-  
+
   animate();
 }
 
@@ -205,7 +200,6 @@ function initPayloadSwitcher() {
     paneText.hidden = true;
   });
 
-  // Text message counter
   const msgInput = document.getElementById('encode-message');
   const msgCount = document.getElementById('encode-msg-count');
   if (msgInput && msgCount) {
@@ -223,7 +217,7 @@ function initPasswordToggles() {
       const input = toggle.previousElementSibling;
       const eyeOpen = toggle.querySelector('.eye-open');
       const eyeClosed = toggle.querySelector('.eye-closed');
-      
+
       if (input.type === 'password') {
         input.type = 'text';
         eyeOpen.style.display = 'none';
@@ -248,7 +242,7 @@ function initPasswordStrength() {
   pwInput.addEventListener('input', () => {
     const val = pwInput.value;
     let strength = 0;
-    
+
     if (val.length > 0) strength += 25;
     if (val.length > 7) strength += 25;
     if (/[A-Z]/.test(val) && /[a-z]/.test(val)) strength += 25;
@@ -260,34 +254,32 @@ function initPasswordStrength() {
       strengthFill.style.background = 'transparent';
       strengthLabel.textContent = '';
     } else if (strength <= 25) {
-      strengthFill.style.background = '#ef4444'; // Red
+      strengthFill.style.background = '#ef4444';
       strengthLabel.textContent = 'Weak';
       strengthLabel.style.color = '#ef4444';
     } else if (strength <= 50) {
-      strengthFill.style.background = '#eab308'; // Yellow
+      strengthFill.style.background = '#eab308';
       strengthLabel.textContent = 'Fair';
       strengthLabel.style.color = '#eab308';
     } else if (strength <= 75) {
-      strengthFill.style.background = '#3b82f6'; // Blue
+      strengthFill.style.background = '#3b82f6';
       strengthLabel.textContent = 'Good';
       strengthLabel.style.color = '#3b82f6';
     } else {
-      strengthFill.style.background = '#10b981'; // Green
+      strengthFill.style.background = '#10b981';
       strengthLabel.textContent = 'Strong';
       strengthLabel.style.color = '#10b981';
     }
   });
 }
 
-// ── Mock Encoding/Decoding Pipelines ────────────────────────────
-// In a real implementation, this will send FormData to your Python backend
-function initEncodeDecodePipelines() {
+// ── Encode & Decode Pipelines ────────────────────────────────────
+function initPipelines() {
   const encodeBtn = document.getElementById('encode-btn');
   const decodeBtn = document.getElementById('decode-btn');
 
   if (encodeBtn) {
     encodeBtn.addEventListener('click', () => {
-      // Validate inputs
       const coverInput = document.getElementById('encode-cover-input');
       const pwInput = document.getElementById('encode-password');
       if (!coverInput.files.length) {
@@ -298,71 +290,84 @@ function initEncodeDecodePipelines() {
         showToast('Please enter a passphrase', 'error');
         return;
       }
-
-      runEncodeMockPipeline();
+      runEncodePipeline();
     });
   }
 
   if (decodeBtn) {
     decodeBtn.addEventListener('click', () => {
-       // Validate inputs
-       const stegoInput = document.getElementById('decode-stego-input');
-       const pwInput = document.getElementById('decode-password');
-       if (!stegoInput.files.length) {
-         showToast('Please select a stego image', 'error');
-         return;
-       }
-       if (!pwInput.value) {
-         showToast('Please enter a passphrase', 'error');
-         return;
-       }
- 
-       runDecodeMockPipeline();
+      const stegoInput = document.getElementById('decode-stego-input');
+      const pwInput = document.getElementById('decode-password');
+      if (!stegoInput.files.length) {
+        showToast('Please select a stego image', 'error');
+        return;
+      }
+      if (!pwInput.value) {
+        showToast('Please enter a passphrase', 'error');
+        return;
+      }
+      runDecodePipeline();
     });
   }
 }
 
-async function runEncodeMockPipeline() {
+// ── Helper: safely parse API error ──────────────────────────────
+async function parseApiError(response, fallback) {
+  try {
+    const data = await response.json();
+    return data.detail || fallback;
+  } catch (_) {
+    try {
+      const text = await response.text();
+      return text.trim() || fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+}
+
+// ── Encode Pipeline ─────────────────────────────────────────────
+async function runEncodePipeline() {
   const placeholder = document.getElementById('encode-placeholder');
-  const pipeline = document.getElementById('encode-pipeline');
-  const result = document.getElementById('encode-result');
-  const errorEl = document.getElementById('encode-error');
-  
+  const pipeline    = document.getElementById('encode-pipeline');
+  const result      = document.getElementById('encode-result');
+  const errorEl     = document.getElementById('encode-error');
+
   placeholder.hidden = true;
-  result.hidden = true;
-  errorEl.hidden = true;
-  pipeline.hidden = false;
+  result.hidden      = true;
+  errorEl.hidden     = true;
+  pipeline.hidden    = false;
 
   const steps = [
-    { id: 'pipe-load', status: 'Reading pixels and analyzing capacity...' },
-    { id: 'pipe-encrypt', status: 'AES-256-GCM encryption applied' },
-    { id: 'pipe-dct', status: 'Applying selected transform (DCT/FFT)...' },
-    { id: 'pipe-embed', status: 'Embedding payload in frequency coefficients...' },
-    { id: 'pipe-save', status: 'Generating lossless PNG...' },
+    { id: 'pipe-load',    label: 'Reading pixels and analyzing capacity...' },
+    { id: 'pipe-encrypt', label: 'AES-256-GCM encryption applied' },
+    { id: 'pipe-dct',     label: 'Applying selected transform (DCT/FFT)...' },
+    { id: 'pipe-embed',   label: 'Embedding payload in frequency coefficients...' },
+    { id: 'pipe-save',    label: 'Generating lossless PNG...' },
   ];
 
-  // Reset steps
-  steps.forEach(s => {
-    const el = document.getElementById(s.id);
-    el.className = 'pipeline-step';
-    el.querySelector('.pipe-status').textContent = '';
-  });
+  const setStep = (id, state, text) => {
+    const el = document.getElementById(id);
+    el.className = `pipeline-step${state ? ' ' + state : ''}`;
+    el.querySelector('.pipe-status').textContent = text || '';
+  };
 
-  const tabText = document.getElementById('tab-text').classList.contains('active');
-  const formData = new FormData();
-  
-  const coverFile = document.getElementById('encode-cover-input').files[0];
+  steps.forEach(s => setStep(s.id, '', ''));
+
+  const isText   = document.getElementById('tab-text').classList.contains('active');
+  const cover    = document.getElementById('encode-cover-input').files[0];
   const password = document.getElementById('encode-password').value;
-  const method = document.getElementById('encode-method').value;
-  const quant = document.getElementById('encode-quant').value;
-  
-  formData.append('cover', coverFile);
+  const method   = document.getElementById('encode-method')?.value || 'dct';
+  const quant    = document.getElementById('encode-quant')?.value  || '8';
+
+  const formData = new FormData();
+  formData.append('cover', cover);
   formData.append('password', password);
   formData.append('method', method);
   formData.append('quantization_step', quant);
 
   let endpoint = '';
-  if (tabText) {
+  if (isText) {
     const message = document.getElementById('encode-message').value;
     if (!message) { showToast('Message is empty', 'error'); return; }
     formData.append('message', message);
@@ -374,75 +379,50 @@ async function runEncodeMockPipeline() {
     endpoint = '/api/encode/image';
   }
 
-  // Visual simulation for upload start
+  // Animate first two steps locally while request is in-flight
   for (let i = 0; i < 2; i++) {
-      const el = document.getElementById(steps[i].id);
-      el.classList.add('active');
-      el.querySelector('.pipe-status').textContent = 'Processing...';
-      await new Promise(r => setTimeout(r, 300));
-      el.classList.remove('active');
-      el.classList.add('done');
-      el.querySelector('.pipe-status').textContent = steps[i].status;
+    setStep(steps[i].id, 'active', 'Processing...');
+    await new Promise(r => setTimeout(r, 300));
+    setStep(steps[i].id, 'done', steps[i].label);
   }
 
-  const elDct = document.getElementById('pipe-dct');
-  elDct.classList.add('active');
-  elDct.querySelector('.pipe-status').textContent = 'Awaiting API response...';
+  setStep('pipe-dct', 'active', 'Awaiting server response...');
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      body: formData
-    });
+    const response = await fetch(endpoint, { method: 'POST', body: formData });
 
     if (!response.ok) {
-      let errorMsg = 'Failed to encode';
-      try {
-        const errorData = await response.json();
-        errorMsg = errorData.detail || errorMsg;
-      } catch (e) {
-        const errorText = await response.text();
-        errorMsg = errorText || errorMsg;
-      }
-      throw new Error(errorMsg);
+      const msg = await parseApiError(response, 'Encoding failed');
+      throw new Error(msg);
     }
-    
-    elDct.classList.remove('active'); elDct.classList.add('done');
-    elDct.querySelector('.pipe-status').textContent = steps[2].status;
-    
-    const elEmbed = document.getElementById('pipe-embed');
-    elEmbed.classList.add('active');
-    await new Promise(r => setTimeout(r, 200));
-    elEmbed.classList.remove('active'); elEmbed.classList.add('done');
-    elEmbed.querySelector('.pipe-status').textContent = steps[3].status;
-    
-    const elSave = document.getElementById('pipe-save');
-    elSave.classList.add('active');
-    await new Promise(r => setTimeout(r, 200));
-    elSave.classList.remove('active'); elSave.classList.add('done');
-    elSave.querySelector('.pipe-status').textContent = steps[4].status;
 
-    // Get metrics from headers
+    setStep('pipe-dct',   'done', steps[2].label);
+    setStep('pipe-embed', 'active', 'Processing...');
+    await new Promise(r => setTimeout(r, 150));
+    setStep('pipe-embed', 'done', steps[3].label);
+    setStep('pipe-save',  'active', 'Processing...');
+    await new Promise(r => setTimeout(r, 150));
+    setStep('pipe-save',  'done', steps[4].label);
+
+    // Metrics from response headers
     const payloadSize = response.headers.get('X-Metrics-Payload') || '-';
-    const bits = response.headers.get('X-Metrics-Bits') || '-';
-    const psnr = response.headers.get('X-Metrics-PSNR') || '-';
-    const mse = response.headers.get('X-Metrics-MSE') || '-';
+    const bits        = response.headers.get('X-Metrics-Bits')    || '-';
+    const psnr        = response.headers.get('X-Metrics-PSNR')    || '-';
+    const mse         = response.headers.get('X-Metrics-MSE')     || '-';
 
-    // Get the image blob
     const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
+    const url  = URL.createObjectURL(blob);
 
     pipeline.hidden = true;
-    result.hidden = false;
-    
+    result.hidden   = false;
+
     document.getElementById('encode-result-img').src = url;
     document.getElementById('metric-payload').textContent = payloadSize + ' bytes';
-    document.getElementById('metric-bits').textContent = bits;
-    document.getElementById('metric-psnr').textContent = psnr + ' dB';
-    document.getElementById('metric-mse').textContent = mse;
-    
-    const downloadBtn = document.getElementById('encode-download-btn');
-    downloadBtn.onclick = () => {
+    document.getElementById('metric-bits').textContent    = bits;
+    document.getElementById('metric-psnr').textContent    = psnr + ' dB';
+    document.getElementById('metric-mse').textContent     = mse;
+
+    document.getElementById('encode-download-btn').onclick = () => {
       const a = document.createElement('a');
       a.href = url;
       a.download = 'stego.png';
@@ -451,94 +431,100 @@ async function runEncodeMockPipeline() {
       a.remove();
     };
 
-    showToast('Image successfully encoded!', 'success');
+    showToast('Image encoded successfully!', 'success');
 
   } catch (err) {
     pipeline.hidden = true;
-    errorEl.hidden = false;
+    errorEl.hidden  = false;
     document.getElementById('encode-error-msg').textContent = err.message;
     showToast('Encoding failed', 'error');
   }
 }
 
-async function runDecodeMockPipeline() {
-  const placeholder = document.getElementById('decode-placeholder');
-  const resultText = document.getElementById('decode-result-text');
-  const resultImage = document.getElementById('decode-result-image');
-  const errorEl = document.getElementById('decode-error');
-  
+// ── Decode Pipeline ─────────────────────────────────────────────
+async function runDecodePipeline() {
+  const placeholder  = document.getElementById('decode-placeholder');
+  const resultText   = document.getElementById('decode-result-text');
+  const resultImage  = document.getElementById('decode-result-image');
+  const errorEl      = document.getElementById('decode-error');
+
   placeholder.hidden = false;
-  resultText.hidden = true;
+  resultText.hidden  = true;
   resultImage.hidden = true;
-  errorEl.hidden = true;
+  errorEl.hidden     = true;
 
-  placeholder.querySelector('p').textContent = 'Extracting and decrypting...';
-  
-  const formData = new FormData();
-  const stegoFile = document.getElementById('decode-stego-input').files[0];
+  const placeholderP = placeholder.querySelector('p');
+  if (placeholderP) placeholderP.textContent = 'Extracting and decrypting...';
+
+  const stego    = document.getElementById('decode-stego-input').files[0];
   const password = document.getElementById('decode-password').value;
-  const method = document.getElementById('decode-method').value;
+  const method   = document.getElementById('decode-method')?.value  || 'dct';
+  const quant    = document.getElementById('decode-quant')?.value   || '8';
 
-  formData.append('stego', stegoFile);
-  formData.append('password', password);
-  formData.append('method', method);
+  const formData = new FormData();
+  formData.append('stego',              stego);
+  formData.append('password',           password);
+  formData.append('method',             method);
+  formData.append('quantization_step',  quant);
 
   try {
-    const response = await fetch('/api/decode', {
-      method: 'POST',
-      body: formData
-    });
+    const response = await fetch('/api/decode', { method: 'POST', body: formData });
 
     if (!response.ok) {
-      let errorMsg = 'Failed to decode';
-      try {
-        const errorData = await response.json();
-        errorMsg = errorData.detail || errorMsg;
-      } catch (e) {
-        const errorText = await response.text();
-        errorMsg = errorText || errorMsg;
-      }
-      throw new Error(errorMsg);
+      const msg = await parseApiError(response, 'Decoding failed');
+      throw new Error(msg);
     }
 
-    const contentType = response.headers.get('content-type');
     placeholder.hidden = true;
+    const contentType = response.headers.get('content-type') || '';
 
-    if (contentType && contentType.includes('application/json')) {
+    if (contentType.includes('application/json')) {
       const data = await response.json();
       resultText.hidden = false;
       document.getElementById('decode-message-text').textContent = data.data;
-      showToast('Secret message revealed successfully', 'success');
-      
+      showToast('Secret message revealed!', 'success');
+
       const copyBtn = document.getElementById('decode-copy-btn');
-      copyBtn.onclick = () => {
-        navigator.clipboard.writeText(data.data);
-        showToast('Copied to clipboard', 'info');
-      };
-      
+      if (copyBtn) {
+        copyBtn.onclick = () => {
+          navigator.clipboard.writeText(data.data);
+          showToast('Copied to clipboard', 'success');
+        };
+      }
+
     } else {
-      // It's an image
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+      const url  = URL.createObjectURL(blob);
       resultImage.hidden = false;
       document.getElementById('decode-result-img').src = url;
-      showToast('Secret image revealed successfully', 'success');
+      showToast('Secret image revealed!', 'success');
 
       const downloadBtn = document.getElementById('decode-download-btn');
-      downloadBtn.onclick = () => {
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'secret.png';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      };
+      if (downloadBtn) {
+        downloadBtn.onclick = () => {
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'secret.png';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+        };
+      }
     }
 
   } catch (err) {
     placeholder.hidden = true;
-    errorEl.hidden = false;
-    document.getElementById('decode-error-msg').textContent = err.message;
+    errorEl.hidden     = false;
+
+    // Provide human-readable hint for common decryption errors
+    let msg = err.message;
+    if (msg.toLowerCase().includes('invalidtag') || msg.includes('decryption')) {
+      msg = 'Decryption failed — wrong passphrase or mismatched quantization step / method.';
+    } else if (msg.toLowerCase().includes('not an aphaneskyma')) {
+      msg = 'This image does not appear to contain AphanesKyma steganography data.';
+    }
+
+    document.getElementById('decode-error-msg').textContent = msg;
     showToast('Decoding failed', 'error');
   }
 }
@@ -554,15 +540,13 @@ function showToast(message, type = 'info') {
 
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  
+
   let icon = '';
   if (type === 'success') icon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`;
-  if (type === 'error') icon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+  if (type === 'error')   icon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
 
   toast.innerHTML = `${icon}<span>${message}</span>`;
   container.appendChild(toast);
 
-  setTimeout(() => {
-    toast.remove();
-  }, 4000);
+  setTimeout(() => toast.remove(), 4000);
 }

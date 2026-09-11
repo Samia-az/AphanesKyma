@@ -259,9 +259,9 @@
                 <div class="field-group">
                   <label class="field-label" for="encode-quant">
                     Quantization Step
-                    <span class="field-hint" id="encode-quant-display">8</span>
+                    <span class="field-hint" id="encode-quant-display">16 (Robust ✓)</span>
                   </label>
-                  <input type="range" id="encode-quant" class="field-range" min="4" max="32" value="8" step="4"
+                  <input type="range" id="encode-quant" class="field-range" min="4" max="32" value="16" step="4"
                          aria-describedby="encode-quant-display" aria-label="Quantization step value" />
                   <div class="range-labels">
                     <span>Better Quality</span>
@@ -431,15 +431,29 @@
               </div>
             </div>
 
-            <!-- Method setting for decode -->
-            <div class="field-group">
-              <label class="field-label" for="decode-method">Embedding Method Used</label>
-              <div class="select-wrapper">
-                <select id="decode-method" class="field-select">
-                  <option value="dct" selected>DCT — Discrete Cosine Transform</option>
-                  <option value="fft">FFT — Fast Fourier Transform</option>
-                </select>
-                <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+            <!-- Method & Quantization setting for decode -->
+            <div class="field-row">
+              <div class="field-group">
+                <label class="field-label" for="decode-method">Embedding Method</label>
+                <div class="select-wrapper">
+                  <select id="decode-method" class="field-select">
+                    <option value="dct" selected>DCT</option>
+                    <option value="fft">FFT</option>
+                  </select>
+                  <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="decode-quant">Quantization Step</label>
+                <div class="select-wrapper">
+                  <select id="decode-quant" class="field-select">
+                    <option value="4">4 (High Quality)</option>
+                    <option value="8">8 (Balanced)</option>
+                    <option value="16" selected>16 (Robust ✓)</option>
+                    <option value="32">32 (Maximum)</option>
+                  </select>
+                  <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
               </div>
             </div>
 
