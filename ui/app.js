@@ -396,8 +396,15 @@ async function runEncodeMockPipeline() {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to encode');
+      let errorMsg = 'Failed to encode';
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.detail || errorMsg;
+      } catch (e) {
+        const errorText = await response.text();
+        errorMsg = errorText || errorMsg;
+      }
+      throw new Error(errorMsg);
     }
     
     elDct.classList.remove('active'); elDct.classList.add('done');
@@ -483,8 +490,15 @@ async function runDecodeMockPipeline() {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to decode');
+      let errorMsg = 'Failed to decode';
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.detail || errorMsg;
+      } catch (e) {
+        const errorText = await response.text();
+        errorMsg = errorText || errorMsg;
+      }
+      throw new Error(errorMsg);
     }
 
     const contentType = response.headers.get('content-type');

@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 LEGACY_DIR = BASE_DIR / "legacy"
 sys.path.append(str(LEGACY_DIR))
 
-from steganography_engine import SteganographyEngine
+from legacy.steganography_engine import SteganographyEngine
 
 app = FastAPI(title="AphanesKyma API")
 
