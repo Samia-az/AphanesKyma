@@ -5,6 +5,7 @@ Simulated channel noise for image<->audio pipeline.
 """
 
 import numpy as np
+from image_audio_fft import SAMPLE_RATE
 
 NOISE_TYPES = ['none', 'awgn', 'clipping', 'dropout', 'bandlimit']
 
@@ -54,7 +55,7 @@ def add_dropout(audio, severity=0.5):
     return out
 
 
-def add_bandlimit(audio, severity=0.5, sample_rate=44100):
+def add_bandlimit(audio, severity=0.5, sample_rate=SAMPLE_RATE):
     """Simulates a channel that doesn't pass all frequencies equally 
     """
     spec = np.fft.rfft(audio)

@@ -8,6 +8,7 @@ the start of the audio, protected with Hamming(7,4)
 """
 
 import numpy as np
+from image_audio_fft import image_to_audio, audio_to_image, SAMPLE_RATE
 
 HEADER_FRAME_LEN = 512          # fixed & known 
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
@@ -175,7 +176,7 @@ def _a_weighting_gain_db(freq_hz):
     return 20 * np.log10(ra) + 2.00
 
 
-def _make_weight_curve(n_cols, strength, floor, sample_rate=44100):
+def _make_weight_curve(n_cols, strength, floor, sample_rate=SAMPLE_RATE):
     """Build a per-bin attenuation curve that de-emphasizes frequencies
     the human ear is most sensitive to, rather than a blind rolloff.
     `strength` scales how aggressively sensitive frequencies are
@@ -239,7 +240,7 @@ def invert_preset(recovered_image, mode_id):
 # Full pipeline
 # --------------------------------------------------------------------------
 
-from image_audio_fft import image_to_audio, audio_to_image 
+ 
 
 
 def image_to_audio_with_header(image, mode='listenable', phase_seed=0):

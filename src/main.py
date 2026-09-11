@@ -8,9 +8,10 @@ from DFT2D import *
 from image_audio_fft import *
 from header_fft import *
 from noise_simulation import *
+from preprocessing import *
 
 imagepath = 'D:/project/AphanesKyma/src/buet.jpg'
-# imagepath = 'D:/project/AphanesKyma/src/autumn-leaves.jpg'
+imagepath = 'D:/project/AphanesKyma/src/autumn-leaves.jpg'
 # test = Image(imagepath)
 # print(test.x)
 # print('\n')
@@ -55,23 +56,24 @@ if img_array.ndim == 3:
 else:
     img_gray = img_array.astype(np.float64)
 
+img_gray = resize_for_audio(img_gray, max_dimension=256) 
 mag_img = normalize_image_to_magnitude(img_gray)
 
-audio = image_to_audio_with_header(mag_img, mode = 'very_listenable')
+audio = image_to_audio_with_header(mag_img, mode = 'fidelity')
 # mode options: 'fidelity', 'balanced', 'listenable', 'very_listenable'
 
-print('audio length: ',len(audio),'durtion sec: ',len(audio)/22000)
+print('audio length: ',len(audio),'durtion sec: ',len(audio)/SAMPLE_RATE)
 
 
 audio_int16 = (audio * 32767 * 0.9).astype(np.int16)
 with wave.open('D:/project/AphanesKyma/src/buet_audio.wav', 'w') as wf:
     wf.setnchannels(1)
     wf.setsampwidth(2)
-    wf.setframerate(22000)
+    wf.setframerate(SAMPLE_RATE)
     wf.writeframes(audio_int16.tobytes())
 
 # simulate noise using one from['none', 'awgn', 'clipping', 'dropout', 'bandlimit']
-noisy_audio = apply_noise(audio, noise_type='clipping',severity= 0.5)
+noisy_audio = apply_noise(audio, noise_type='none',severity= 0.5)
 # reconstruct back from the freshly-generated audio to verify it round-trips
 recon,nrows, ncols,mode_used = audio_with_header_to_image(noisy_audio)
 recon_img = magnitude_to_image_uint8(recon)
