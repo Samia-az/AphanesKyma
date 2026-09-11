@@ -9,7 +9,7 @@ from image_audio_fft import *
 from header_fft import *
 from noise_simulation import *
 from preprocessing import *
-
+from denoise import *
 imagepath = 'D:/project/AphanesKyma/src/buet.jpg'
 imagepath = 'D:/project/AphanesKyma/src/autumn-leaves.jpg'
 # test = Image(imagepath)
@@ -73,12 +73,15 @@ with wave.open('D:/project/AphanesKyma/src/buet_audio.wav', 'w') as wf:
     wf.writeframes(audio_int16.tobytes())
 
 # simulate noise using one from['none', 'awgn', 'clipping', 'dropout', 'bandlimit']
-noisy_audio = apply_noise(audio, noise_type='none',severity= 0.5)
+noisy_audio = apply_noise(audio, noise_type='dropout',severity= 0.5)
+
 # reconstruct back from the freshly-generated audio to verify it round-trips
 recon,nrows, ncols,mode_used = audio_with_header_to_image(noisy_audio)
+
+# recon_denoised = denoise_image(recon, method='median')
 recon_img = magnitude_to_image_uint8(recon)
 print(f"reconstructed with ({nrows}, {ncols}) , mode = {mode_used}")
- 
+
 plt.imshow(recon_img, cmap='inferno', origin='lower', aspect='auto')
 plt.title('Reconstructed image from generated audio')
 plt.show()

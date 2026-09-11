@@ -12,12 +12,23 @@ from fastapi.staticfiles import StaticFiles
 logger = logging.getLogger("aphaneskyma")
 logging.basicConfig(level=logging.INFO)
 
-# Add legacy folder to Python path so we can import the engine
+# Add legacy folder and src folder to Python path
 BASE_DIR = Path(__file__).resolve().parent.parent
 LEGACY_DIR = BASE_DIR / "legacy"
+SRC_DIR = BASE_DIR / "src"
+
 sys.path.append(str(LEGACY_DIR))
+sys.path.append(str(SRC_DIR))
 
 from legacy.steganography_engine import SteganographyEngine
+
+# Imports for Image to Audio conversion
+import wave
+from imageio.v2 import imread
+from src.preprocessing import resize_for_audio
+from src.image_audio_fft import normalize_image_to_magnitude, SAMPLE_RATE
+from src.header_fft import image_to_audio_with_header
+import numpy as np
 
 app = FastAPI(title="AphanesKyma API")
 
@@ -237,6 +248,58 @@ async def api_decode(
             else:
                 detail = f"Unexpected error: {cls}"
         raise HTTPException(status_code=400, detail=detail)
+
+
+@app.post("/api/convert/image-to-audio")
+async def api_image_to_audio(
+    image: UploadFile = File(...),
+    mode: str = Form("listenable")
+):
+    temp_dir = Path(mkdtemp(dir=TMP_DIR))
+    try:
+        image_path = temp_dir / image.filename
+        output_path = temp_dir / "output.wav"
+
+        # Save uploaded image
+        with open(image_path, "wb") as buffer:
+            shutil.copyfileobj(image.file, buffer)
+
+        # Read and process image
+        img_array = imread(str(image_path))
+        if img_array.ndim == 3:
+            img_gray = img_array[:,:,0].astype(np.float64)
+        else:
+            img_gray = img_array.astype(np.float64)
+
+        img_gray = resize_for_audio(img_gray, max_dimension=256) 
+        mag_img = normalize_image_to_magnitude(img_gray)
+        
+        # Convert to audio
+        audio = image_to_audio_with_header(mag_img, mode=mode)
+        
+        # Convert to int16 and save as wav
+        audio_int16 = (audio * 32767 * 0.9).astype(np.int16)
+        with wave.open(str(output_path), 'w') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(SAMPLE_RATE)
+            wf.writeframes(audio_int16.tobytes())
+
+        from fastapi.background import BackgroundTasks
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(shutil.rmtree, temp_dir, ignore_errors=True)
+
+        return FileResponse(
+            path=output_path, 
+            filename="sonification.wav",
+            media_type="audio/wav",
+            background=background_tasks
+        )
+
+    except Exception as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.exception("Image to audio conversion failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
 
 # Mount the static UI files at the root
 UI_DIR = BASE_DIR / "ui"

@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initPasswordToggles();
   initPasswordStrength();
   initPipelines();
+  initAudioPipeline();
 });
 
 // ── Navigation ──────────────────────────────────────────────────
@@ -106,6 +107,7 @@ function initDragAndDrop() {
     { zone: 'encode-cover-zone', input: 'encode-cover-input', idle: 'encode-cover-idle', preview: 'encode-cover-preview', img: 'encode-cover-img', info: 'encode-cover-info', change: 'encode-cover-change' },
     { zone: 'encode-secret-zone', input: 'encode-secret-input', idle: 'encode-secret-idle', preview: 'encode-secret-preview', img: 'encode-secret-img', info: 'encode-secret-info', change: 'encode-secret-change' },
     { zone: 'decode-stego-zone', input: 'decode-stego-input', idle: 'decode-stego-idle', preview: 'decode-stego-preview', img: 'decode-stego-img', info: 'decode-stego-info', change: 'decode-stego-change' },
+    { zone: 'audio-image-zone', input: 'audio-image-input', idle: 'audio-image-idle', preview: 'audio-image-preview', img: 'audio-image-img', info: 'audio-image-info', change: 'audio-image-change' },
   ];
 
   zones.forEach(z => {
@@ -526,6 +528,71 @@ async function runDecodePipeline() {
 
     document.getElementById('decode-error-msg').textContent = msg;
     showToast('Decoding failed', 'error');
+  }
+}
+
+// ── Audio Pipeline ─────────────────────────────────────────────
+function initAudioPipeline() {
+  const convertBtn = document.getElementById('audio-convert-btn');
+  if (convertBtn) {
+    convertBtn.addEventListener('click', runImageToAudioPipeline);
+  }
+}
+
+async function runImageToAudioPipeline() {
+  const imgInput = document.getElementById('audio-image-input');
+  const modeSelect = document.getElementById('audio-mode');
+  
+  const convertBtn = document.getElementById('audio-convert-btn');
+  const placeholder = document.getElementById('audio-placeholder');
+  const resultPanel = document.getElementById('audio-result');
+  const audioPlayer = document.getElementById('audio-player');
+  const downloadBtn = document.getElementById('audio-download-btn');
+
+  if (!imgInput.files[0]) {
+    showToast("Please upload an image to convert.", "error");
+    return;
+  }
+
+  // Reset UI
+  resultPanel.hidden = true;
+  convertBtn.hidden = true;
+  placeholder.hidden = false;
+
+  const formData = new FormData();
+  formData.append('image', imgInput.files[0]);
+  formData.append('mode', modeSelect ? modeSelect.value : 'fidelity');
+
+  try {
+    const res = await fetch('/api/convert/image-to-audio', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Conversion failed");
+    }
+
+    const blob = await res.blob();
+    const audioUrl = URL.createObjectURL(blob);
+    
+    audioPlayer.src = audioUrl;
+    resultPanel.hidden = false;
+    showToast("Conversion successful!", "success");
+
+    downloadBtn.onclick = () => {
+      const a = document.createElement('a');
+      a.href = audioUrl;
+      a.download = `sonification_${modeSelect.value}.wav`;
+      a.click();
+    };
+
+  } catch (err) {
+    showToast("Error: " + err.message, "error");
+  } finally {
+    placeholder.hidden = true;
+    convertBtn.hidden = false;
   }
 }
 
