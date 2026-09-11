@@ -1,18 +1,12 @@
 import numpy as np
+SAMPLE_RATE = 33100
 
 # image to audio
 #
 # --------------------------------------------------------------------------
 # Phase generators
-#
-# audio_to_image() (below) only ever reads np.abs(np.fft.rfft(frame)) --
-# it discards phase completely. That means every phase generator here is
-# fidelity-free: switching between them changes only what the audio
-# sounds like, never what image comes back. Random phase per bin is what
-# makes the current output sound like broadband hiss; the alternatives
-# below trade that for something more structured/tonal, for free.
 # --------------------------------------------------------------------------
-SAMPLE_RATE = 33100
+
 def _pin_dc_nyquist(phase, frm_len):
     """np.fft.irfft only uses the *real* part of bin 0 and the Nyquist
     bin (frm_len is always even here, so there always is one) -- any
