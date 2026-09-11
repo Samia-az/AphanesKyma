@@ -59,11 +59,10 @@ class FFTSteganographer:
     # ==================================================
 
     def apply_fft(self, block):
-        return np.fft.fft2(block)
+        return np.fft.fft2(block, norm="ortho")     # add norm="ortho"
 
     def apply_ifft(self, coefficients):
-        
-        return np.fft.ifft2(coefficients).real
+        return np.fft.ifft2(coefficients, norm="ortho").real   # add norm="ortho"
 
     # ==================================================
     # QIM ON MAGNITUDE

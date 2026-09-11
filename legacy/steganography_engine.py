@@ -5,6 +5,7 @@ from payload import PayloadManager
 from image_payload import ImagePayloadManager
 from dct_steganography import DCTSteganographer
 from fft_steganography import FFTSteganographer
+from capacity_helper import fit_cover_to_capacity
 
 
 class SteganographyEngine:
@@ -310,6 +311,13 @@ class SteganographyEngine:
         # ----------------------------------------------
         # Load cover
         # ----------------------------------------------
+        cover_path = fit_cover_to_capacity(
+            cover_path,
+            len(payload),
+            self.dct.BLOCK_SIZE,
+            len(self.dct.EMBED_POSITIONS)
+        )
+
 
         image = self.dct.load_image(
             cover_path
