@@ -1,5 +1,9 @@
 numpy
 matplotlib
-streamlit
 imageio
 scipy
+fastapi
+uvicorn
+python-multipart
+cryptography
+Pillow
