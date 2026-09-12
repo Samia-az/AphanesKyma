@@ -1189,3 +1189,32 @@ body {
   .feature-grid { grid-template-columns: 1fr; }
   .result-metrics { grid-template-columns: 1fr 1fr; }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   SONIFICATION STUDIO CUSTOM STYLES
+════════════════════════════════════════════════════════════════ */
+.success-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--teal);
+}
+
+.audio-player-wrapper {
+  background: var(--bg-2);
+  border: 1px solid var(--border-glow);
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+  box-shadow: var(--glow-teal);
+}
+
+.mic-recording-pulse {
+  animation: mic-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(15,248,231,0.6); }
+  70% { box-shadow: 0 0 0 15px rgba(15,248,231,0); }
+  100% { box-shadow: 0 0 0 0 rgba(15,248,231,0); }
+}
+

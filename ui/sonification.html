@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AphanesKyma — Sonification Studio</title>
+  <meta name="description" content="AphanesKyma Sonification Studio: Convert images to audio waveforms and reconstruct visual images from recorded or uploaded audio signals using spectral FFT." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Animated background canvas ── -->
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+  <!-- ── Header / Nav ── -->
+  <header class="site-header" role="banner">
+    <div class="header-inner">
+      <a href="index.html" class="brand" aria-label="AphanesKyma Home">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="20" cy="20" r="18" stroke="url(#grad1)" stroke-width="1.5"/>
+            <path d="M8 20 Q14 10 20 20 Q26 30 32 20" stroke="url(#grad2)" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="20" cy="20" r="4" fill="url(#grad1)" opacity="0.9"/>
+            <circle cx="20" cy="20" r="2" fill="#0ff8e7" opacity="0.6"/>
+            <defs>
+              <linearGradient id="grad1" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#0ff8e7"/>
+                <stop offset="100%" stop-color="#a855f7"/>
+              </linearGradient>
+              <linearGradient id="grad2" x1="8" y1="20" x2="32" y2="20" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#0ff8e7"/>
+                <stop offset="100%" stop-color="#a855f7"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <span class="brand-name">Aphanes<span class="brand-accent">Kyma</span></span>
+      </a>
+
+      <nav class="nav-links" role="navigation" aria-label="Primary navigation">
+        <a href="index.html#encode-section" id="nav-encode" class="nav-link">Encode</a>
+        <a href="index.html#decode-section" id="nav-decode" class="nav-link">Decode</a>
+        <a href="sonification.html" id="nav-convert" class="nav-link active">Sonification Studio</a>
+        <a href="index.html#about-section" id="nav-about" class="nav-link">About</a>
+      </nav>
+
+      <div class="header-badge" aria-label="Audio engine badge">
+        <span class="badge-dot" aria-hidden="true"></span>
+        FFT Spectral Synthesis
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content">
+
+    <!-- ═══════════════════════════════════════
+         HERO
+    ═══════════════════════════════════════ -->
+    <section class="hero-section" style="min-height: 40vh; padding: 4rem 2rem 2rem;">
+      <div class="hero-content">
+        <div class="hero-eyebrow">
+          <span class="eyebrow-dot" aria-hidden="true"></span>
+          Audio &amp; Spectral Transformation
+        </div>
+        <h1 class="hero-title" style="font-size: clamp(2rem, 5vw, 3.5rem);">
+          Sonification Studio<br/>
+          <span class="hero-title-gradient">Image <span style="font-family: sans-serif;">&harr;</span> Audio Synthesis</span>
+        </h1>
+        <p class="hero-subtitle" style="margin-bottom: 1.5rem;">
+          Synthesize image spectrums into playable sound waves, or record live mic audio and reconstruct the original visual content.
+        </p>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════
+         STUDIO SECTION
+    ═══════════════════════════════════════ -->
+    <section class="studio-section" style="padding-top: 1rem;">
+      <div class="section-container">
+        
+        <!-- Mode Tabs -->
+        <div class="payload-switcher" role="tablist" aria-label="Sonification Mode" style="margin: 0 auto 3rem auto;">
+          <button id="tab-img2audio" class="payload-tab active" role="tab" aria-selected="true" aria-controls="pane-img2audio">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+            Image to Audio
+          </button>
+          <button id="tab-audio2img" class="payload-tab" role="tab" aria-selected="false" aria-controls="pane-audio2img">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Audio to Image (Decode / Record)
+          </button>
+        </div>
+
+        <!-- ═══════════════════════════════════════
+             PANE 1: IMAGE TO AUDIO
+        ═══════════════════════════════════════ -->
+        <div id="pane-img2audio" class="payload-pane active">
+          <div class="studio-grid">
+            
+            <!-- Left Inputs -->
+            <div class="studio-inputs">
+              <div class="field-group">
+                <label class="field-label" for="son-image-input">
+                  Input Image
+                  <span class="field-hint">PNG / JPG — max dimension rescaled for FFT</span>
+                </label>
+                <div class="drop-zone" id="son-image-zone" role="button" tabindex="0">
+                  <input type="file" id="son-image-input" accept="image/*" class="drop-input" aria-hidden="true" />
+                  <div class="drop-idle" id="son-image-idle">
+                    <div class="drop-icon">
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                    </div>
+                    <p class="drop-text">Drop image to convert</p>
+                    <p class="drop-subtext">or <span class="drop-link">browse files</span></p>
+                  </div>
+                  <div class="drop-preview" id="son-image-preview" hidden>
+                    <img id="son-image-img" alt="Image preview" />
+                    <div class="preview-overlay">
+                      <button class="preview-change" id="son-image-change" type="button">Change</button>
+                      <div class="preview-info" id="son-image-info"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Preset selection dropdown -->
+              <div class="field-group">
+                <label class="field-label" for="son-audio-mode">
+                  Audio Fidelity / Preset Mode
+                  <span class="field-hint">Human hearing acoustic curve &amp; row smoothing</span>
+                </label>
+                <div class="select-wrapper">
+                  <select id="son-audio-mode" class="field-select">
+                    <option value="listenable" selected>Listenable (Tuned for Human Ear — Recommended)</option>
+                    <option value="fidelity">Fidelity (Exact raw frequencies, higher noise)</option>
+                    <option value="balanced">Balanced (Slight psychoacoustic smoothing)</option>
+                    <option value="very_listenable">Very Listenable (Maximum smooth tone)</option>
+                  </select>
+                  <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                </div>
+              </div>
+
+              <button class="btn btn-primary btn-large" id="son-encode-btn" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                Synthesize Audio Waveform
+              </button>
+            </div>
+
+            <!-- Right Output -->
+            <div class="studio-output">
+              <div class="output-card" id="son-encode-card">
+                <div class="output-placeholder" id="son-encode-placeholder">
+                  <div class="placeholder-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                  </div>
+                  <p>Audio waveform player will appear here</p>
+                </div>
+
+                <div class="encode-result" id="son-encode-result" hidden style="width: 100%;">
+                  <div class="success-header">
+                    <svg class="success-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    <h3>Sonification Complete</h3>
+                  </div>
+
+                  <div class="audio-player-wrapper" style="margin: 1.5rem 0;">
+                    <audio id="son-audio-player" controls style="width: 100%; outline: none; border-radius: 8px;"></audio>
+                  </div>
+
+                  <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                    <button class="btn btn-primary" id="son-audio-download" type="button" style="flex: 1;">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                      Download .wav File
+                    </button>
+                    <button class="btn btn-ghost" id="son-send-to-decode" type="button">
+                      Send to Audio Decoder &rarr;
+                    </button>
+                  </div>
+                </div>
+
+                <div class="encode-error" id="son-encode-error" hidden role="alert">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <p id="son-encode-error-msg"></p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+
+        <!-- ═══════════════════════════════════════
+             PANE 2: AUDIO TO IMAGE (DECODE & RECORD)
+        ═══════════════════════════════════════ -->
+        <div id="pane-audio2img" class="payload-pane" hidden>
+          <div class="studio-grid">
+            
+            <!-- Left Inputs -->
+            <div class="studio-inputs">
+              
+              <!-- Source Selection (File Upload vs Live Mic Record) -->
+              <div class="field-group">
+                <label class="field-label">Audio Source</label>
+                <div class="payload-switcher" style="width: 100%; margin-bottom: 0.5rem;">
+                  <button id="src-tab-file" class="payload-tab active" type="button" style="flex: 1;">Upload WAV File</button>
+                  <button id="src-tab-mic" class="payload-tab" type="button" style="flex: 1;">Record Live Mic</button>
+                </div>
+              </div>
+
+              <!-- Sub-pane: WAV File Upload -->
+              <div id="src-pane-file" class="field-group">
+                <label class="field-label" for="son-wav-input">
+                  Audio WAV File
+                  <span class="field-hint">Contains embedded header and spectral image</span>
+                </label>
+                <div class="drop-zone" id="son-wav-zone" role="button" tabindex="0">
+                  <input type="file" id="son-wav-input" accept="audio/wav,audio/x-wav,audio/*" class="drop-input" aria-hidden="true" />
+                  <div class="drop-idle" id="son-wav-idle">
+                    <div class="drop-icon">
+                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                    </div>
+                    <p class="drop-text">Drop WAV audio file here</p>
+                    <p class="drop-subtext">or <span class="drop-link">browse files</span></p>
+                  </div>
+                  <div class="drop-preview" id="son-wav-preview" hidden style="justify-content: center; align-items: center; background: var(--bg-2);">
+                    <div style="text-align: center; padding: 1.5rem;">
+                      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--teal)" stroke-width="1.5"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                      <p id="son-wav-info" style="font-size: 0.9rem; font-weight: 600; margin-top: 0.5rem; color: var(--text-1);"></p>
+                      <button class="preview-change" id="son-wav-change" type="button" style="margin-top: 0.5rem;">Change File</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Sub-pane: Live Mic Recorder -->
+              <div id="src-pane-mic" class="field-group" hidden>
+                <div class="studio-panel" style="background: var(--bg-1); border: 1px solid var(--border); padding: 1.5rem; border-radius: var(--radius-lg); text-align: center;">
+                  <div class="mic-status-icon" id="mic-status-icon" style="width: 56px; height: 56px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border); margin: 0 auto 1rem; display: flex; align-items: center; justify-content: center; color: var(--teal);">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                  </div>
+                  <h4 id="mic-status-text" style="color: var(--text-1); font-size: 1rem; font-weight: 600;">Microphone Idle</h4>
+                  <p id="mic-timer-text" style="font-family: 'JetBrains Mono', monospace; color: var(--teal); font-size: 1.1rem; margin: 0.5rem 0 1rem;">00:00</p>
+                  
+                  <div style="display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap;">
+                    <button class="btn btn-primary" id="btn-mic-record" type="button">Start Recording</button>
+                    <button class="btn btn-ghost" id="btn-mic-stop" type="button" disabled>Stop</button>
+                  </div>
+                  
+                  <label style="font-size: 0.8rem; color: var(--text-2); display: flex; align-items: center; gap: 0.5rem; justify-content: center; margin-top: 0.875rem; cursor: pointer;">
+                    <input type="checkbox" id="chk-auto-play-source" checked style="accent-color: var(--teal);" />
+                    Auto-play generated audio during recording
+                  </label>
+                  
+                  <div id="mic-playback-wrap" hidden style="margin-top: 1.25rem;">
+                    <p style="font-size: 0.8rem; color: var(--text-2); margin-bottom: 0.5rem;">Recorded Audio Preview:</p>
+                    <audio id="mic-audio-preview" controls style="width: 100%; outline: none; border-radius: 8px;"></audio>
+
+                    <!-- Audio Trimmer Controls -->
+                    <div class="trimmer-panel" id="mic-trimmer-panel" style="margin-top: 1rem; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; text-align: left;">
+                      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                        <span style="font-size: 0.85rem; font-weight: 600; color: var(--teal); display: flex; align-items: center; gap: 0.4rem;">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+                          Audio Trimmer
+                        </span>
+                        <span id="trim-duration-badge" style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: var(--text-2);">0.00s trimmed</span>
+                      </div>
+
+                      <div class="field-group" style="margin-bottom: 0.75rem;">
+                        <label class="field-label" style="font-size: 0.75rem;">
+                          Start Cutoff
+                          <span class="field-hint" id="trim-start-display">0.00s</span>
+                        </label>
+                        <input type="range" id="trim-start-range" class="field-range" min="0" max="10" step="0.05" value="0" />
+                      </div>
+
+                      <div class="field-group">
+                        <label class="field-label" style="font-size: 0.75rem;">
+                          End Cutoff
+                          <span class="field-hint" id="trim-end-display">0.00s</span>
+                        </label>
+                        <input type="range" id="trim-end-range" class="field-range" min="0" max="10" step="0.05" value="0" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Denoise settings -->
+              <details class="advanced-panel" id="denoise-advanced" open>
+                <summary class="advanced-toggle">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+                  Denoising Filter Settings
+                  <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                </summary>
+                <div class="advanced-body">
+                  <div class="field-group">
+                    <label class="field-label" for="son-denoise-method">Denoise Method</label>
+                    <div class="select-wrapper">
+                      <select id="son-denoise-method" class="field-select">
+                        <option value="median" selected>Median Filter (Recommended for speckle / clipping noise)</option>
+                        <option value="spectral">2D DFT Spectral Low-Pass (Keeps low frequencies)</option>
+                        <option value="blur">Box Blur (Averages neighbor pixels)</option>
+                        <option value="none">None (Passthrough raw spectrum)</option>
+                      </select>
+                      <svg class="select-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                    </div>
+                  </div>
+
+                  <!-- Kernel size slider (median & blur) -->
+                  <div class="field-group" id="group-kernel-size">
+                    <label class="field-label" for="son-kernel-size">
+                      Filter Kernel Size
+                      <span class="field-hint" id="son-kernel-val">3 x 3</span>
+                    </label>
+                    <input type="range" id="son-kernel-size" class="field-range" min="3" max="9" step="2" value="3" />
+                  </div>
+
+                  <!-- Spectral keep fraction slider (spectral) -->
+                  <div class="field-group" id="group-keep-fraction" style="display: none;">
+                    <label class="field-label" for="son-keep-fraction">
+                      Low-Pass Keep Fraction
+                      <span class="field-hint" id="son-fraction-val">0.35</span>
+                    </label>
+                    <input type="range" id="son-keep-fraction" class="field-range" min="0.10" max="0.90" step="0.05" value="0.35" />
+                  </div>
+                </div>
+              </details>
+
+              <button class="btn btn-decode btn-large" id="son-decode-btn" type="button">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                Reconstruct Image from Audio
+              </button>
+            </div>
+
+            <!-- Right Output -->
+            <div class="studio-output">
+              <div class="output-card" id="son-decode-card">
+                <div class="output-placeholder" id="son-decode-placeholder">
+                  <div class="placeholder-icon">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  </div>
+                  <p>Reconstructed image will appear here</p>
+                </div>
+
+                <div class="decode-result-image" id="son-decode-result" hidden style="width: 100%;">
+                  <div class="reveal-header">
+                    <div class="reveal-badge">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+                      Image Reconstructed
+                    </div>
+                  </div>
+
+                  <div style="position: relative; margin: 1rem 0;">
+                    <img id="son-result-img" alt="Reconstructed image" class="result-image" />
+                  </div>
+
+                  <div class="result-metrics" role="list" aria-label="Reconstruction metrics" style="margin-bottom: 1rem;">
+                    <div class="metric" role="listitem">
+                      <span class="metric-label">Detected Mode</span>
+                      <span class="metric-value" id="son-meta-mode">—</span>
+                    </div>
+                    <div class="metric" role="listitem">
+                      <span class="metric-label">Resolution</span>
+                      <span class="metric-value" id="son-meta-dims">—</span>
+                    </div>
+                  </div>
+
+                  <button class="btn btn-decode" id="son-img-download" type="button" style="width: 100%;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download Reconstructed PNG
+                  </button>
+                </div>
+
+                <div class="encode-error" id="son-decode-error" hidden role="alert">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <p id="son-decode-error-msg"></p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer class="site-footer" role="contentinfo">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <span class="brand-name small">Aphanes<span class="brand-accent">Kyma</span></span>
+        <p class="footer-copy">&copy; 2026 AphanesKyma. Frequency-Domain Steganography &amp; Sonification Platform.</p>
+      </div>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+  <script src="sonification.js"></script>
+</body>
+</html>

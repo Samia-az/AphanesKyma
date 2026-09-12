@@ -26,8 +26,11 @@ from legacy.steganography_engine import SteganographyEngine
 import wave
 from imageio.v2 import imread
 from src.preprocessing import resize_for_audio
-from src.image_audio_fft import normalize_image_to_magnitude, SAMPLE_RATE
-from src.header_fft import image_to_audio_with_header
+from src.image_audio_fft import normalize_image_to_magnitude, SAMPLE_RATE, magnitude_to_image_uint8
+from src.header_fft import image_to_audio_with_header, audio_with_header_to_image
+from src.capture_decode import decode_captured_audio
+from src.denoise import denoise_image
+from PIL import Image as PILImage
 import numpy as np
 
 app = FastAPI(title="AphanesKyma API")
@@ -299,6 +302,85 @@ async def api_image_to_audio(
     except Exception as e:
         shutil.rmtree(temp_dir, ignore_errors=True)
         logger.exception("Image to audio conversion failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/convert/audio-to-image")
+async def api_audio_to_image(
+    audio: UploadFile = File(...),
+    denoise_method: str = Form("median"),
+    kernel_size: int = Form(3),
+    keep_fraction: float = Form(0.35)
+):
+    temp_dir = Path(mkdtemp(dir=TMP_DIR))
+    try:
+        audio_path = temp_dir / audio.filename
+        output_png_path = temp_dir / "reconstructed.png"
+
+        # Save uploaded audio file
+        with open(audio_path, "wb") as buffer:
+            shutil.copyfileobj(audio.file, buffer)
+
+        # Read WAV file
+        with wave.open(str(audio_path), 'rb') as wf:
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+            framerate = wf.getframerate()
+            n_frames = wf.getnframes()
+            raw_bytes = wf.readframes(n_frames)
+
+        if sampwidth == 2:
+            samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float64) / 32767.0
+        elif sampwidth == 4:
+            samples = np.frombuffer(raw_bytes, dtype=np.int32).astype(np.float64) / 2147483647.0
+        elif sampwidth == 1:
+            samples = (np.frombuffer(raw_bytes, dtype=np.uint8).astype(np.float64) - 128.0) / 128.0
+        else:
+            samples = np.frombuffer(raw_bytes, dtype=np.float32).astype(np.float64)
+
+        if n_channels > 1:
+            samples = samples[::n_channels]
+
+        # Try clean header decode first, fallback to capture decode if needed
+        try:
+            img_matrix, n_rows, n_cols, mode_name = audio_with_header_to_image(samples)
+        except Exception as err_clean:
+            logger.info("Clean decode failed (%s), attempting capture decode...", err_clean)
+            img_matrix, n_rows, n_cols, mode_name = decode_captured_audio(samples, native_rate=framerate)
+
+        # Apply denoising if requested
+        if denoise_method and denoise_method != "none":
+            img_matrix = denoise_image(
+                img_matrix,
+                method=denoise_method,
+                kernel_size=kernel_size,
+                keep_fraction=keep_fraction
+            )
+
+        # Convert to PNG image
+        uint8_img = magnitude_to_image_uint8(img_matrix)
+        pil_img = PILImage.fromarray(uint8_img)
+        pil_img.save(str(output_png_path), format="PNG")
+
+        from fastapi.background import BackgroundTasks
+        background_tasks = BackgroundTasks()
+        background_tasks.add_task(shutil.rmtree, temp_dir, ignore_errors=True)
+
+        return FileResponse(
+            path=output_png_path,
+            filename="reconstructed.png",
+            media_type="image/png",
+            headers={
+                "X-Decoded-Mode": str(mode_name),
+                "X-Decoded-Rows": str(n_rows),
+                "X-Decoded-Cols": str(n_cols)
+            },
+            background=background_tasks
+        )
+
+    except Exception as e:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.exception("Audio to image conversion failed: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 # Mount the static UI files at the root

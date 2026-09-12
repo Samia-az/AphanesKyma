@@ -287,27 +287,45 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
     return full_audio
 
 
+def _is_valid_header_fields(n_rows, n_cols, mode_id, max_frame_len):
+    """Shared sanity check for a decoded (n_rows, n_cols, mode_id) triple.
+    Under noise (or, for captured audio, simple misalignment) the header
+    can decode to nonsensical values -- e.g. because the Hamming code
+    corrected the wrong bit for a multi-bit error it can't actually fix.
+    Used both by the normal decode path (to fail clearly rather than try
+    to process garbage dimensions) and by find_header_offset() in
+    capture_decode.py (to tell a correctly-aligned header apart from
+    noise/misalignment while searching)."""
+    if n_cols < 2 or 2 * (n_cols - 1) > max_frame_len:
+        return False
+    if n_rows < 1 or n_rows > 100000:
+        return False
+    return True
+
+
 def audio_with_header_to_image(audio):
     """
     Decode audio -> image using only what's embedded in the audio itself
     (no external knowledge of the original image's shape OR the encoding
     preset needed -- both are recovered from the header).
+
+    Assumes the header starts at sample 0 of `audio` -- for audio that
+    was captured live (mic recording, unknown start offset), locate the
+    correct starting offset first with capture_decode.find_header_offset()
+    and pass audio[offset:] in here instead.
     """
     n_rows, n_cols, mode_id = _read_header_majority_vote(audio)
 
-    # Sanity-check the recovered header values -- under severe noise the
-    # header can decode to a nonsensical n_cols/n_rows (e.g. because the
-    # Hamming code corrected the wrong bit for a multi-bit error it
-    # can't actually fix). Rather than attempt to process garbage
-    # dimensions (which can be extremely slow or fail deep inside
-    # numpy), fail clearly here so the caller knows this noise severity
-    # exceeded what the header could survive.
-    max_frame_len = len(audio)  # can't have a frame longer than the audio itself
-    if n_cols < 2 or 2 * (n_cols - 1) > max_frame_len or n_rows < 1 or n_rows > 100000:
+    # Rather than attempt to process garbage dimensions (which can be
+    # extremely slow or fail deep inside numpy), fail clearly here so
+    # the caller knows this noise/misalignment exceeded what the
+    # header's error correction could survive.
+    if not _is_valid_header_fields(n_rows, n_cols, mode_id, len(audio)):
         raise ValueError(
             f"Header could not be reliably recovered (decoded n_rows={n_rows}, "
-            f"n_cols={n_cols}) -- noise severity likely exceeded what the "
-            f"header's error correction can survive."
+            f"n_cols={n_cols}) -- noise severity (or, for captured audio, "
+            f"misalignment) likely exceeded what the header's error "
+            f"correction can survive."
         )
 
     frame_len = 2 * (n_cols - 1)
@@ -319,17 +337,47 @@ def audio_with_header_to_image(audio):
     return image, n_rows, n_cols, mode_name
 
 
-def _read_header_majority_vote(audio):
-    """Read all HEADER_REPEATS copies of the header, decode each
-    independently, and majority-vote each field. This survives noise
-    that badly corrupts one or two copies (e.g. clipping, which hits
-    the header harder than the data audio) as long as a majority of
-    copies still decode correctly."""
+def _read_header_copies(audio, offset=0):
+    """Read all HEADER_REPEATS copies of the header starting at `offset`,
+    WITHOUT voting them together -- returns the list of raw
+    (n_rows, n_cols, mode_id) triples, one per copy. Used by
+    capture_decode.find_header_offset(), which needs to check whether
+    the copies genuinely agree with each other (a much stronger signal
+    than any single copy merely passing the loose bounds check) rather
+    than accepting whatever per-field majority voting produces -- voting
+    always returns *some* value even when the three copies have nothing
+    in common, which makes it unsuitable on its own for telling a real,
+    aligned header apart from an arbitrary offset into ordinary audio."""
+    out = []
+    for i in range(HEADER_REPEATS):
+        start = offset + i * HEADER_FRAME_LEN
+        segment = audio[start:start + HEADER_FRAME_LEN]
+        if len(segment) < HEADER_FRAME_LEN:
+            out.append((-1, -1, -1))
+            continue
+        out.append(read_header_frame(segment))
+    return out
+
+
+def _read_header_majority_vote(audio, offset=0):
+    """Read all HEADER_REPEATS copies of the header starting at `offset`
+    samples into `audio`, decode each independently, and majority-vote
+    each field. This survives noise that badly corrupts one or two
+    copies (e.g. clipping, which hits the header harder than the data
+    audio) as long as a majority of copies still decode correctly.
+
+    `offset` defaults to 0 (the normal case: audio you encoded/wrote
+    yourself, header at the very start). capture_decode.py's search
+    passes different candidate offsets to find where a real mic
+    recording's header actually begins."""
     from collections import Counter
 
     votes_rows, votes_cols, votes_mode = [], [], []
     for i in range(HEADER_REPEATS):
-        segment = audio[i * HEADER_FRAME_LEN:(i + 1) * HEADER_FRAME_LEN]
+        start = offset + i * HEADER_FRAME_LEN
+        segment = audio[start:start + HEADER_FRAME_LEN]
+        if len(segment) < HEADER_FRAME_LEN:
+            return -1, -1, -1  # not enough audio left at this offset
         n_rows, n_cols, mode_id = read_header_frame(segment)
         votes_rows.append(n_rows)
         votes_cols.append(n_cols)
