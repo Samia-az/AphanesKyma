@@ -1,7 +1,37 @@
 """
 capture_decode.py
 -------------------
-Decoding path for audio 
+Decoding path for audio that was actually played through a speaker and
+picked up by a microphone on a second device, instead of the clean
+in-memory audio used by main.py's round-trip test.
+
+Two problems this solves that a controlled round-trip never has to:
+
+    1. RATE MISMATCH -- the encoded WAV declares SAMPLE_RATE (see
+       image_audio_fft.py) and playback happens at that real-time rate
+       regardless of any device's internal audio engine. But the
+       capturing device's microphone digitizes at *its own* native rate
+       (commonly 44100 or 48000 Hz, and this genuinely varies by
+       browser/OS/hardware -- don't hardcode it). The same real second
+       of audio is represented by a different sample COUNT at that rate
+       than it was at encode time, so frame_len-sized slices of the raw
+       capture do not line up with the original frames until the
+       capture is resampled back down to SAMPLE_RATE.
+
+       Read the true capture rate from the browser (AudioContext.sampleRate
+       or track.getSettings().sampleRate) and save the recording as a WAV
+       with that rate in its own header -- load_wav()/wave.getframerate()
+       then gives you the right number with no guessing. Capture raw PCM
+       (AudioContext + AudioWorkletNode), not MediaRecorder's default
+       lossy Opus/WebM output -- lossy compression is tuned to discard
+       exactly the fine spectral detail this scheme depends on.
+
+    2. UNKNOWN START OFFSET -- even after the user trims obvious silence
+       in the webapp, that trim isn't sample-precise, so the header is
+       not guaranteed to sit at sample 0 the way it does for audio you
+       generated and read back yourself. find_header_offset() searches a
+       bounded window near the start for the offset where the header
+       actually begins.
 """
 
 import numpy as np
@@ -59,7 +89,7 @@ def find_header_offset(audio, search_seconds=2.0, coarse_stride=8,
     decoding deliberately tolerant of a fair amount of misalignment (a
     window a couple hundred samples off the true boundary, straddling
     silence and real header content, can still decode the right
-    (n_rows, n_cols, mode_id) -- that's the whole point of that
+    (n_rows, n_cols, mode_id, data_repeats) -- that's the whole point of that
     redundancy). But audio_with_header_to_image() then slices the data
     portion at a FIXED distance (HEADER_FRAME_LEN * HEADER_REPEATS) past
     whatever offset it's given -- so "the header decoded correctly here"
@@ -133,8 +163,8 @@ def find_header_offset(audio, search_seconds=2.0, coarse_stride=8,
     # Belt-and-suspenders: also confirm the header actually decodes to
     # sane values at the offset we landed on (cheap, and catches the
     # rare case of a strong correlation peak that isn't really a header).
-    n_rows, n_cols, mode_id = _read_header_majority_vote(audio, offset=fine_best)
-    if not _is_valid_header_fields(n_rows, n_cols, mode_id, len(audio) - fine_best):
+    n_rows, n_cols, mode_id, data_repeats = _read_header_majority_vote(audio, offset=fine_best)
+    if not _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, len(audio) - fine_best):
         return None
 
     return fine_best
@@ -156,7 +186,15 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=2.0):
                    of the user's manual front-trim in the webapp; the
                    default of 2s is generous for that.
 
-    Raises ValueError if no valid header could be located.
+    Returns whatever audio_with_header_to_image() returns: (image,
+    n_rows, n_cols, mode_name, source), where source is 'full' or
+    'thumbnail_fallback' -- see that function's docstring in
+    header_fft.py. Only raises if the header block itself couldn't even
+    be LOCATED (see find_header_offset above); if it's located but its
+    *contents* are too corrupted to trust, this falls back to the small
+    protected thumbnail automatically rather than raising.
+
+    Raises ValueError if no header alignment could be located at all.
     """
     resampled = resample_to_target_rate(raw_audio, native_rate, SAMPLE_RATE)
     offset = find_header_offset(resampled, search_seconds=search_seconds)

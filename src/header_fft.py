@@ -3,112 +3,72 @@ header_fft.py
 -------------
 Self-describing header for the row-wise FFT image<->audio scheme.
 
-Embeds n_rows / n_cols / audio_mode into a fixed-length header frame at
-the start of the audio, protected with Hamming(7,4)
+Embeds n_rows / n_cols / audio_mode / data_repeats into a fixed-length
+header frame at the start of the audio, protected with Hamming(7,4).
+
+Also wires in two extra robustness features on top of the original
+header-only scheme:
+
+  - data_repeats: each data row can be transmitted multiple times: the
+    encoder repeats every row `data_repeats` times before handing the
+    (expanded) image to image_to_audio(), and the decoder collapses
+    each group of `data_repeats` decoded frames back into one row via a
+    per-bin MEDIAN across the group -- the continuous-valued analogue
+    of the header's own bit-level majority voting, since data rows
+    carry real magnitude values rather than discrete bits. Raises the
+    *typical* quality of a successful decode; see thumbnail_channel.py
+    for the complementary guarantee.
+
+  - thumbnail fallback: a small, independently-decodable, heavily
+    protected preview (see thumbnail_channel.py) is transmitted right
+    after the main header. If the main header can't be validated,
+    audio_with_header_to_image() automatically falls back to that
+    preview instead of raising -- a probability FLOOR on getting some
+    recognizable image back, distinct from data_repeats' quality boost.
 """
 
 import numpy as np
 from image_audio_fft import image_to_audio, audio_to_image, SAMPLE_RATE
+from hamming_bits import (
+    hamming74_encode, hamming74_decode,
+    bits_to_hamming_stream, hamming_stream_to_bits,
+    int_to_bits, bits_to_int,
+)
+from thumbnail_channel import (
+    THUMBNAIL_DIM, THUMBNAIL_FRAME_LEN, THUMBNAIL_REPEATS,
+    build_thumbnail_block, decode_thumbnail_block,
+)
 
 HEADER_FRAME_LEN = 512          # fixed & known 
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
 HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
+HEADER_DATA_REPEATS_BITS = 4    # bits used to encode data_repeats (1-15)
 HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
 HEADER_REPEATS = 3              
 HEADER_AMPLITUDE_SCALE = 0.35   
 
-# --------------------------------------------------------------------------
-# Hamming(7,4)
-# --------------------------------------------------------------------------
+THUMBNAIL_BLOCK_START = HEADER_FRAME_LEN * HEADER_REPEATS
+THUMBNAIL_BLOCK_LEN = THUMBNAIL_FRAME_LEN * THUMBNAIL_REPEATS
+DATA_BLOCK_START = THUMBNAIL_BLOCK_START + THUMBNAIL_BLOCK_LEN
 
-_G = np.array([  # generator matrix (4 data bits -> 7 coded bits)
-    [1,1,0,1],
-    [1,0,1,1],
-    [1,0,0,0],
-    [0,1,1,1],
-    [0,1,0,0],
-    [0,0,1,0],
-    [0,0,0,1],
-]) % 2
-
-_H = np.array([  # parity-check matrix
-    [1,0,1,0,1,0,1],
-    [0,1,1,0,0,1,1],
-    [0,0,0,1,1,1,1],
-]) % 2
-
-_R = np.array([  # extracts the 4 data bits from a corrected 7-bit codeword
-    [0,0,1,0,0,0,0],
-    [0,0,0,0,1,0,0],
-    [0,0,0,0,0,1,0],
-    [0,0,0,0,0,0,1],
-]) % 2
-
-
-def hamming74_encode(bits4):
-    """bits4: array of 4 bits -> returns array of 7 coded bits."""
-    return (_G @ bits4) % 2
-
-
-def hamming74_decode(bits7):
-    """bits7: array of 7 (possibly noisy) bits -> corrects a single-bit
-    error if present, returns the original 4 data bits."""
-    bits7 = np.array(bits7, dtype=int) % 2
-    syndrome = (_H @ bits7) % 2
-    error_pos = syndrome[0] * 1 + syndrome[1] * 2 + syndrome[2] * 4
-    if error_pos != 0:
-        bits7 = bits7.copy()
-        bits7[error_pos - 1] ^= 1  # flip the bad bit
-    return (_R @ bits7) % 2
-
-
-def bits_to_hamming_stream(bits):
-    """Encode an arbitrary-length bit array in chunks of 4 -> 7-bit codewords."""
-    pad = (-len(bits)) % 4
-    bits = np.concatenate([bits, np.zeros(pad, dtype=int)])
-    out = []
-    for i in range(0, len(bits), 4):
-        out.append(hamming74_encode(bits[i:i+4]))
-    return np.concatenate(out)
-
-
-def hamming_stream_to_bits(coded_bits, n_out_bits):
-    """Decode a 7-bit-codeword stream back to data bits, trimmed to n_out_bits."""
-    out = []
-    for i in range(0, len(coded_bits), 7):
-        chunk = coded_bits[i:i+7]
-        if len(chunk) < 7:
-            break
-        out.append(hamming74_decode(chunk))
-    bits = np.concatenate(out) if out else np.zeros(0, dtype=int)
-    return bits[:n_out_bits]
-
-
-def int_to_bits(value, n_bits):
-    return np.array([(value >> (n_bits - 1 - i)) & 1 for i in range(n_bits)])
-
-
-def bits_to_int(bits):
-    value = 0
-    for b in bits:
-        value = (value << 1) | int(b)
-    return value
+MAX_DATA_REPEATS = (1 << HEADER_DATA_REPEATS_BITS) - 1
 
 
 # --------------------------------------------------------------------------
 # Header <-> audio frame
 # --------------------------------------------------------------------------
 
-def make_header_frame(n_rows, n_cols, mode_id=0, on_amplitude=40.0):
+def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40.0):
     """
     Build the time-domain header frame (length HEADER_FRAME_LEN) that
-    encodes n_rows, n_cols, and mode_id, Hamming-protected, as an
-    on/off pattern across frequency bins.
+    encodes n_rows, n_cols, mode_id, and data_repeats, Hamming-protected,
+    as an on/off pattern across frequency bins.
     """
     bits = np.concatenate([
         int_to_bits(n_rows, HEADER_BITS_PER_VALUE),
         int_to_bits(n_cols, HEADER_BITS_PER_VALUE),
         int_to_bits(mode_id, HEADER_MODE_BITS),
+        int_to_bits(data_repeats, HEADER_DATA_REPEATS_BITS),
     ])
     coded = bits_to_hamming_stream(bits)
 
@@ -125,15 +85,15 @@ def make_header_frame(n_rows, n_cols, mode_id=0, on_amplitude=40.0):
 
 def read_header_frame(frame, threshold_ratio=0.5):
     """
-    Given the first HEADER_FRAME_LEN samples of audio, recover
-    (n_rows, n_cols, mode_id), correcting up to 1 bit of noise per
-    7-bit chunk.
+    Given HEADER_FRAME_LEN samples, recover
+    (n_rows, n_cols, mode_id, data_repeats), correcting up to 1 bit of
+    noise per 7-bit chunk.
     """
     spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
     magnitude = np.abs(spectrum)
 
-    total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS
-    n_chunks = -(-total_data_bits // 4)  
+    total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
+    n_chunks = -(-total_data_bits // 4)
     n_coded_bits = n_chunks * 7
     coded_region = magnitude[:n_coded_bits]
 
@@ -144,7 +104,9 @@ def read_header_frame(frame, threshold_ratio=0.5):
     n_rows = bits_to_int(bits[:HEADER_BITS_PER_VALUE])
     n_cols = bits_to_int(bits[HEADER_BITS_PER_VALUE:2 * HEADER_BITS_PER_VALUE])
     mode_id = bits_to_int(bits[2 * HEADER_BITS_PER_VALUE:2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS])
-    return n_rows, n_cols, mode_id
+    data_repeats = bits_to_int(bits[2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS:
+                                     2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS])
+    return n_rows, n_cols, mode_id, data_repeats
 
 
 # --------------------------------------------------------------------------
@@ -240,37 +202,57 @@ def invert_preset(recovered_image, mode_id):
 # Full pipeline
 # --------------------------------------------------------------------------
 
- 
-
-
-def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
+def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repeats=1):
     """
-    Encode image -> audio
+    Encode image -> audio.
 
     mode : str or int
         One of AUDIO_PRESETS' names ('fidelity', 'balanced',
         'listenable', 'very_listenable') or its integer id.
+    data_repeats : int, 1..MAX_DATA_REPEATS
+        How many times to transmit each data row. 1 = original
+        behavior (no repetition). >1 repeats every row that many times
+        before encoding; the decoder collapses each group of
+        `data_repeats` decoded frames back into one row via a per-bin
+        median, which is far more robust to localized corruption
+        (dropout/clipping bursts, real acoustic noise) at the linear
+        cost of `data_repeats`x longer audio. Stored in the header, so
+        the decoder needs no external knowledge of it.
+
+    Audio layout: [header x HEADER_REPEATS] + [thumbnail x THUMBNAIL_REPEATS]
+    + [data audio, built from data_repeats-times-repeated rows].
     """
     if isinstance(mode, str):
         mode_id = next(i for i, p in AUDIO_PRESETS.items() if p['name'] == mode)
     else:
         mode_id = mode
 
+    if not (1 <= data_repeats <= MAX_DATA_REPEATS):
+        raise ValueError(f"data_repeats must be in [1, {MAX_DATA_REPEATS}], got {data_repeats}")
+
     n_rows, n_cols = image.shape
     processed_image, _weight = apply_preset(image, mode_id)
 
-    header = make_header_frame(n_rows, n_cols, mode_id)
-    data_audio, frame_len = image_to_audio(processed_image, phase_seed=phase_seed)
+    # Repeat every row data_repeats times before encoding. audio_to_image
+    # doesn't need to change at all -- it just sees a taller image with
+    # data_repeats * n_rows frames; the decoder below groups them back.
+    expanded_image = np.repeat(processed_image, data_repeats, axis=0)
+
+    header = make_header_frame(n_rows, n_cols, mode_id, data_repeats)
+    data_audio, frame_len = image_to_audio(expanded_image, phase_seed=phase_seed)
 
     # Rebalance the header's amplitude relative to the data audio's peak
     # (see HEADER_AMPLITUDE_SCALE above for why this specific value, and
     # why it can't simply be "as loud as possible" or "as quiet as
     # possible" -- it trades off AWGN robustness against clipping
-    # robustness).
+    # robustness). The thumbnail block gets the same treatment, via
+    # THUMBNAIL_AMPLITUDE_SCALE in thumbnail_channel.py.
     header_peak = np.abs(header).max()
     data_peak = np.abs(data_audio).max()
     if header_peak > 0 and data_peak > 0:
         header = header * (data_peak / header_peak) * HEADER_AMPLITUDE_SCALE
+
+    thumbnail_block = build_thumbnail_block(image, data_peak_for_scaling=data_peak)
 
     # Repeat the header HEADER_REPEATS times. Each copy is decoded
     # independently at read time and the results are majority-voted --
@@ -279,7 +261,7 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
     # amplitude-based noise than the rest of the signal even after
     # rebalancing (a short, sparse pattern has more of its own samples
     # sitting near peak amplitude than the spread-out data audio does).
-    full_audio = np.concatenate([header] * HEADER_REPEATS + [data_audio])
+    full_audio = np.concatenate([header] * HEADER_REPEATS + [thumbnail_block, data_audio])
 
     peak = np.max(np.abs(full_audio))
     if peak > 0:
@@ -287,18 +269,21 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0):
     return full_audio
 
 
-def _is_valid_header_fields(n_rows, n_cols, mode_id, max_frame_len):
-    """Shared sanity check for a decoded (n_rows, n_cols, mode_id) triple.
-    Under noise (or, for captured audio, simple misalignment) the header
-    can decode to nonsensical values -- e.g. because the Hamming code
-    corrected the wrong bit for a multi-bit error it can't actually fix.
-    Used both by the normal decode path (to fail clearly rather than try
-    to process garbage dimensions) and by find_header_offset() in
-    capture_decode.py (to tell a correctly-aligned header apart from
-    noise/misalignment while searching)."""
+def _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, max_frame_len):
+    """Shared sanity check for a decoded (n_rows, n_cols, mode_id,
+    data_repeats) quadruple. Under noise (or, for captured audio, simple
+    misalignment) the header can decode to nonsensical values -- e.g.
+    because the Hamming code corrected the wrong bit for a multi-bit
+    error it can't actually fix. Used both by the normal decode path (to
+    fail clearly / fall back to the thumbnail rather than try to process
+    garbage dimensions) and by find_header_offset() in capture_decode.py
+    (to tell a correctly-aligned header apart from noise/misalignment
+    while searching)."""
     if n_cols < 2 or 2 * (n_cols - 1) > max_frame_len:
         return False
     if n_rows < 1 or n_rows > 100000:
+        return False
+    if not (1 <= data_repeats <= MAX_DATA_REPEATS):
         return False
     return True
 
@@ -306,57 +291,56 @@ def _is_valid_header_fields(n_rows, n_cols, mode_id, max_frame_len):
 def audio_with_header_to_image(audio):
     """
     Decode audio -> image using only what's embedded in the audio itself
-    (no external knowledge of the original image's shape OR the encoding
-    preset needed -- both are recovered from the header).
+    (no external knowledge of the original image's shape, encoding
+    preset, or row-repeat count needed -- all recovered from the
+    header).
+
+    Returns (image, n_rows, n_cols, mode_name, source) where source is:
+      'full'                if the main header validated and the full
+                            data channel was decoded (with data_repeats
+                            median-voting applied if data_repeats > 1).
+      'thumbnail_fallback'  if the main header failed validation and we
+                            fell back to the small, independently
+                            protected preview instead (see
+                            thumbnail_channel.py) -- image will be
+                            THUMBNAIL_DIM x THUMBNAIL_DIM in this case.
+
+    Only raises if even the thumbnail fallback can't be decoded (i.e.
+    there isn't even THUMBNAIL_FRAME_LEN samples of usable audio at the
+    expected thumbnail position) -- meaning the corruption/misalignment
+    is severe enough that nothing at all is recoverable.
 
     Assumes the header starts at sample 0 of `audio` -- for audio that
     was captured live (mic recording, unknown start offset), locate the
     correct starting offset first with capture_decode.find_header_offset()
     and pass audio[offset:] in here instead.
     """
-    n_rows, n_cols, mode_id = _read_header_majority_vote(audio)
+    n_rows, n_cols, mode_id, data_repeats = _read_header_majority_vote(audio)
 
-    # Rather than attempt to process garbage dimensions (which can be
-    # extremely slow or fail deep inside numpy), fail clearly here so
-    # the caller knows this noise/misalignment exceeded what the
-    # header's error correction could survive.
-    if not _is_valid_header_fields(n_rows, n_cols, mode_id, len(audio)):
-        raise ValueError(
-            f"Header could not be reliably recovered (decoded n_rows={n_rows}, "
-            f"n_cols={n_cols}) -- noise severity (or, for captured audio, "
-            f"misalignment) likely exceeded what the header's error "
-            f"correction can survive."
-        )
+    if _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, len(audio) - DATA_BLOCK_START):
+        frame_len = 2 * (n_cols - 1)
+        data_audio = audio[DATA_BLOCK_START:]
+        expanded = audio_to_image(data_audio, frame_len, n_rows=n_rows * data_repeats)
 
-    frame_len = 2 * (n_cols - 1)
-    data_audio = audio[HEADER_FRAME_LEN * HEADER_REPEATS:]
-    recovered = audio_to_image(data_audio, frame_len, n_rows=n_rows)
-    image = invert_preset(recovered, mode_id)
+        if data_repeats > 1:
+            # Collapse each group of data_repeats decoded frames back
+            # into one row via a per-bin median -- the continuous-value
+            # analogue of the header's own bit-level majority voting.
+            expanded = expanded.reshape(n_rows, data_repeats, n_cols)
+            recovered = np.median(expanded, axis=1)
+        else:
+            recovered = expanded
 
-    mode_name = AUDIO_PRESETS.get(mode_id, {}).get('name', f'unknown({mode_id})')
-    return image, n_rows, n_cols, mode_name
+        image = invert_preset(recovered, mode_id)
+        mode_name = AUDIO_PRESETS.get(mode_id, {}).get('name', f'unknown({mode_id})')
+        return image, n_rows, n_cols, mode_name, 'full'
 
-
-def _read_header_copies(audio, offset=0):
-    """Read all HEADER_REPEATS copies of the header starting at `offset`,
-    WITHOUT voting them together -- returns the list of raw
-    (n_rows, n_cols, mode_id) triples, one per copy. Used by
-    capture_decode.find_header_offset(), which needs to check whether
-    the copies genuinely agree with each other (a much stronger signal
-    than any single copy merely passing the loose bounds check) rather
-    than accepting whatever per-field majority voting produces -- voting
-    always returns *some* value even when the three copies have nothing
-    in common, which makes it unsuitable on its own for telling a real,
-    aligned header apart from an arbitrary offset into ordinary audio."""
-    out = []
-    for i in range(HEADER_REPEATS):
-        start = offset + i * HEADER_FRAME_LEN
-        segment = audio[start:start + HEADER_FRAME_LEN]
-        if len(segment) < HEADER_FRAME_LEN:
-            out.append((-1, -1, -1))
-            continue
-        out.append(read_header_frame(segment))
-    return out
+    # Main header didn't validate -- fall back to the thumbnail, which
+    # is independently positioned/sized (fixed constants, doesn't need
+    # anything from the main header) and far more heavily protected
+    # relative to how much it's carrying.
+    thumbnail = decode_thumbnail_block(audio, offset=THUMBNAIL_BLOCK_START)
+    return thumbnail, THUMBNAIL_DIM, THUMBNAIL_DIM, 'thumbnail_fallback', 'thumbnail_fallback'
 
 
 def _read_header_majority_vote(audio, offset=0):
@@ -372,18 +356,20 @@ def _read_header_majority_vote(audio, offset=0):
     recording's header actually begins."""
     from collections import Counter
 
-    votes_rows, votes_cols, votes_mode = [], [], []
+    votes_rows, votes_cols, votes_mode, votes_repeats = [], [], [], []
     for i in range(HEADER_REPEATS):
         start = offset + i * HEADER_FRAME_LEN
         segment = audio[start:start + HEADER_FRAME_LEN]
         if len(segment) < HEADER_FRAME_LEN:
-            return -1, -1, -1  # not enough audio left at this offset
-        n_rows, n_cols, mode_id = read_header_frame(segment)
+            return -1, -1, -1, -1  # not enough audio left at this offset
+        n_rows, n_cols, mode_id, data_repeats = read_header_frame(segment)
         votes_rows.append(n_rows)
         votes_cols.append(n_cols)
         votes_mode.append(mode_id)
+        votes_repeats.append(data_repeats)
 
     n_rows = Counter(votes_rows).most_common(1)[0][0]
     n_cols = Counter(votes_cols).most_common(1)[0][0]
     mode_id = Counter(votes_mode).most_common(1)[0][0]
-    return n_rows, n_cols, mode_id
+    data_repeats = Counter(votes_repeats).most_common(1)[0][0]
+    return n_rows, n_cols, mode_id, data_repeats

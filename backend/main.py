@@ -256,7 +256,8 @@ async def api_decode(
 @app.post("/api/convert/image-to-audio")
 async def api_image_to_audio(
     image: UploadFile = File(...),
-    mode: str = Form("listenable")
+    mode: str = Form("listenable"),
+    data_repeats: int = Form(1)
 ):
     temp_dir = Path(mkdtemp(dir=TMP_DIR))
     try:
@@ -278,7 +279,7 @@ async def api_image_to_audio(
         mag_img = normalize_image_to_magnitude(img_gray)
         
         # Convert to audio
-        audio = image_to_audio_with_header(mag_img, mode=mode)
+        audio = image_to_audio_with_header(mag_img, mode=mode, data_repeats=data_repeats)
         
         # Convert to int16 and save as wav
         audio_int16 = (audio * 32767 * 0.9).astype(np.int16)
@@ -343,10 +344,18 @@ async def api_audio_to_image(
 
         # Try clean header decode first, fallback to capture decode if needed
         try:
-            img_matrix, n_rows, n_cols, mode_name = audio_with_header_to_image(samples)
+            img_matrix, n_rows, n_cols, mode_name, source = audio_with_header_to_image(samples)
+            if source == 'thumbnail_fallback':
+                logger.info("Clean decode returned thumbnail_fallback, attempting capture decode...")
+                try:
+                    cap_img_matrix, cap_n_rows, cap_n_cols, cap_mode_name, cap_source = decode_captured_audio(samples, native_rate=framerate)
+                    if cap_source == 'full':
+                        img_matrix, n_rows, n_cols, mode_name, source = cap_img_matrix, cap_n_rows, cap_n_cols, cap_mode_name, cap_source
+                except Exception as err_cap:
+                    logger.info("Capture decode attempt failed (%s), keeping thumbnail fallback.", err_cap)
         except Exception as err_clean:
             logger.info("Clean decode failed (%s), attempting capture decode...", err_clean)
-            img_matrix, n_rows, n_cols, mode_name = decode_captured_audio(samples, native_rate=framerate)
+            img_matrix, n_rows, n_cols, mode_name, source = decode_captured_audio(samples, native_rate=framerate)
 
         # Apply denoising if requested
         if denoise_method and denoise_method != "none":
@@ -373,7 +382,8 @@ async def api_audio_to_image(
             headers={
                 "X-Decoded-Mode": str(mode_name),
                 "X-Decoded-Rows": str(n_rows),
-                "X-Decoded-Cols": str(n_cols)
+                "X-Decoded-Cols": str(n_cols),
+                "X-Decoded-Source": str(source)
             },
             background=background_tasks
         )

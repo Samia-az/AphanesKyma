@@ -59,6 +59,8 @@ mag_img = normalize_image_to_magnitude(img_gray)
 
 audio = image_to_audio_with_header(mag_img, mode = 'fidelity')
 # mode options: 'fidelity', 'balanced', 'listenable', 'very_listenable'
+# also accepts data_repeats=N (default 1) to transmit each row N times,
+# median-voted back together on decode -- see header_fft.py
 
 print('audio length: ',len(audio),'durtion sec: ',len(audio)/SAMPLE_RATE)
 
@@ -73,12 +75,12 @@ with wave.open('D:/project/AphanesKyma/src/buet_audio.wav', 'w') as wf:
 
 
 # reconstruct back from the freshly-generated audio to verify it round-trips
-recon,nrows, ncols,mode_used = audio_with_header_to_image(audio)
+recon,nrows, ncols,mode_used, source = audio_with_header_to_image(audio)
 
 # recon_denoised = denoise_image(recon, method='median')
 recon_img = magnitude_to_image_uint8(recon)
-print(f"reconstructed with ({nrows}, {ncols}) , mode = {mode_used}")
+print(f"reconstructed with ({nrows}, {ncols}) , mode = {mode_used}, source = {source}")
 
 plt.imshow(recon_img, cmap='inferno', origin='lower', aspect='auto')
-plt.title('Reconstructed image from generated audio')
+plt.title(f'Reconstructed image from generated audio ({source})')
 plt.show()
