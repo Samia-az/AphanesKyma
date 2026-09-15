@@ -1,5 +1,5 @@
 import numpy as np
-SAMPLE_RATE = 33100
+SAMPLE_RATE = 48000
 
 # image to audio
 #

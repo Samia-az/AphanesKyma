@@ -29,6 +29,7 @@ header-only scheme:
 
 import numpy as np
 from image_audio_fft import image_to_audio, audio_to_image, SAMPLE_RATE
+from marker import make_marker, MARKER_AMPLITUDE_SCALE, MARKER_LEN
 from hamming_bits import (
     hamming74_encode, hamming74_decode,
     bits_to_hamming_stream, hamming_stream_to_bits,
@@ -39,17 +40,27 @@ from thumbnail_channel import (
     build_thumbnail_block, decode_thumbnail_block,
 )
 
-HEADER_FRAME_LEN = 512          # fixed & known 
+
+
+HEADER_FRAME_LEN = 512          # fixed & known
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
 HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
 HEADER_DATA_REPEATS_BITS = 4    # bits used to encode data_repeats (1-15)
 HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
-HEADER_REPEATS = 3              
-HEADER_AMPLITUDE_SCALE = 0.35   
-
-THUMBNAIL_BLOCK_START = HEADER_FRAME_LEN * HEADER_REPEATS
-THUMBNAIL_BLOCK_LEN = THUMBNAIL_FRAME_LEN * THUMBNAIL_REPEATS
-DATA_BLOCK_START = THUMBNAIL_BLOCK_START + THUMBNAIL_BLOCK_LEN
+HEADER_REPEATS = 3
+HEADER_AMPLITUDE_SCALE = 0.35
+HEADER_BIN_OFFSET = 32   # ~3000 Hz -- empirically, bins below ~2.6kHz get
+                          # destroyed by the acoustic path (speaker rolloff /
+                          # mic rumble filter / room resonance), even though
+                          # HEADER_N_COLS has plenty of unused headroom above
+                          # where the header actually needs to live.
+# Audio layout (sample offsets, all at SAMPLE_RATE):
+#   [marker : MARKER_LEN] + [header × HEADER_REPEATS] + [thumbnail × THUMBNAIL_REPEATS] + [data]
+MARKER_BLOCK_START    = 0
+HEADER_BLOCK_START    = MARKER_LEN
+THUMBNAIL_BLOCK_START = MARKER_LEN + HEADER_FRAME_LEN * HEADER_REPEATS
+THUMBNAIL_BLOCK_LEN   = THUMBNAIL_FRAME_LEN * THUMBNAIL_REPEATS
+DATA_BLOCK_START      = THUMBNAIL_BLOCK_START + THUMBNAIL_BLOCK_LEN
 
 MAX_DATA_REPEATS = (1 << HEADER_DATA_REPEATS_BITS) - 1
 
@@ -58,12 +69,9 @@ MAX_DATA_REPEATS = (1 << HEADER_DATA_REPEATS_BITS) - 1
 # Header <-> audio frame
 # --------------------------------------------------------------------------
 
+
+
 def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40.0):
-    """
-    Build the time-domain header frame (length HEADER_FRAME_LEN) that
-    encodes n_rows, n_cols, mode_id, and data_repeats, Hamming-protected,
-    as an on/off pattern across frequency bins.
-    """
     bits = np.concatenate([
         int_to_bits(n_rows, HEADER_BITS_PER_VALUE),
         int_to_bits(n_cols, HEADER_BITS_PER_VALUE),
@@ -72,11 +80,11 @@ def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40
     ])
     coded = bits_to_hamming_stream(bits)
 
-    if len(coded) > HEADER_N_COLS:
+    if HEADER_BIN_OFFSET + len(coded) > HEADER_N_COLS:
         raise ValueError("Header doesn't fit in HEADER_FRAME_LEN; increase it.")
 
     magnitude = np.zeros(HEADER_N_COLS)
-    magnitude[:len(coded)] = coded * on_amplitude
+    magnitude[HEADER_BIN_OFFSET:HEADER_BIN_OFFSET + len(coded)] = coded * on_amplitude
 
     spectrum = magnitude.astype(np.complex128)
     frame = np.fft.irfft(spectrum, n=HEADER_FRAME_LEN)
@@ -84,18 +92,13 @@ def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40
 
 
 def read_header_frame(frame, threshold_ratio=0.5):
-    """
-    Given HEADER_FRAME_LEN samples, recover
-    (n_rows, n_cols, mode_id, data_repeats), correcting up to 1 bit of
-    noise per 7-bit chunk.
-    """
     spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
     magnitude = np.abs(spectrum)
 
     total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
     n_chunks = -(-total_data_bits // 4)
     n_coded_bits = n_chunks * 7
-    coded_region = magnitude[:n_coded_bits]
+    coded_region = magnitude[HEADER_BIN_OFFSET:HEADER_BIN_OFFSET + n_coded_bits]
 
     thresh = coded_region.max() * threshold_ratio if coded_region.max() > 0 else 0
     coded_bits = (coded_region > thresh).astype(int)
@@ -249,6 +252,10 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     # THUMBNAIL_AMPLITUDE_SCALE in thumbnail_channel.py.
     header_peak = np.abs(header).max()
     data_peak = np.abs(data_audio).max()
+    marker = make_marker()
+    marker_peak = np.abs(marker).max()
+    if marker_peak > 0 and data_peak > 0:
+        marker = marker * (data_peak / marker_peak) * MARKER_AMPLITUDE_SCALE
     if header_peak > 0 and data_peak > 0:
         header = header * (data_peak / header_peak) * HEADER_AMPLITUDE_SCALE
 
@@ -261,7 +268,13 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     # amplitude-based noise than the rest of the signal even after
     # rebalancing (a short, sparse pattern has more of its own samples
     # sitting near peak amplitude than the spread-out data audio does).
-    full_audio = np.concatenate([header] * HEADER_REPEATS + [thumbnail_block, data_audio])
+    audio_layout = (
+        "[marker:%d] + [header×%d] + [thumbnail×%d] + [data]"
+        % (MARKER_LEN, HEADER_REPEATS, THUMBNAIL_REPEATS)
+    )
+    full_audio = np.concatenate(
+        [marker] + [header] * HEADER_REPEATS + [thumbnail_block, data_audio]
+    )
 
     peak = np.max(np.abs(full_audio))
     if peak > 0:
@@ -290,56 +303,52 @@ def _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, max_frame_len
 
 def audio_with_header_to_image(audio):
     """
-    Decode audio -> image using only what's embedded in the audio itself
-    (no external knowledge of the original image's shape, encoding
-    preset, or row-repeat count needed -- all recovered from the
-    header).
+    Decode audio -> image.
 
-    Returns (image, n_rows, n_cols, mode_name, source) where source is:
-      'full'                if the main header validated and the full
-                            data channel was decoded (with data_repeats
-                            median-voting applied if data_repeats > 1).
-      'thumbnail_fallback'  if the main header failed validation and we
-                            fell back to the small, independently
-                            protected preview instead (see
-                            thumbnail_channel.py) -- image will be
-                            THUMBNAIL_DIM x THUMBNAIL_DIM in this case.
+    Expected audio layout (from sample 0 of the WAV):
+      [marker : MARKER_LEN]
+      [header frame × HEADER_REPEATS : HEADER_FRAME_LEN each]
+      [thumbnail block : THUMBNAIL_BLOCK_LEN]
+      [data audio]
 
-    Only raises if even the thumbnail fallback can't be decoded (i.e.
-    there isn't even THUMBNAIL_FRAME_LEN samples of usable audio at the
-    expected thumbnail position) -- meaning the corruption/misalignment
-    is severe enough that nothing at all is recoverable.
+    For clean round-trips (file upload) pass the WAV samples directly.
+    For captured audio pass `audio[marker_end:]` where marker_end is
+    returned by marker.find_marker_offset().
 
-    Assumes the header starts at sample 0 of `audio` -- for audio that
-    was captured live (mic recording, unknown start offset), locate the
-    correct starting offset first with capture_decode.find_header_offset()
-    and pass audio[offset:] in here instead.
+    Returns (image, n_rows, n_cols, mode_name, source).
+      source='full'               -- full data channel decoded.
+      source='thumbnail_fallback' -- fell back to thumbnail preview.
     """
-    n_rows, n_cols, mode_id, data_repeats = _read_header_majority_vote(audio)
+    # Strip marker; everything below is in body-relative coordinates.
+    body = audio[MARKER_LEN:]
 
-    if _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, len(audio) - DATA_BLOCK_START):
-        frame_len = 2 * (n_cols - 1)
-        data_audio = audio[DATA_BLOCK_START:]
-        expanded = audio_to_image(data_audio, frame_len, n_rows=n_rows * data_repeats)
+    # Body layout:
+    #   [0 .. HEADER_FRAME_LEN*HEADER_REPEATS)   -- header copies
+    #   [HEADER_FRAME_LEN*HEADER_REPEATS ..)      -- thumbnail block
+    #   [HEADER_FRAME_LEN*HEADER_REPEATS + THUMBNAIL_BLOCK_LEN ..) -- data
+    _BODY_THUMBNAIL_START = HEADER_FRAME_LEN * HEADER_REPEATS
+    _BODY_DATA_START      = _BODY_THUMBNAIL_START + THUMBNAIL_BLOCK_LEN
+
+    n_rows, n_cols, mode_id, data_repeats = _read_header_majority_vote(body)
+
+    if _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats,
+                               len(body) - _BODY_DATA_START):
+        frame_len  = 2 * (n_cols - 1)
+        data_audio = body[_BODY_DATA_START:]
+        expanded   = audio_to_image(data_audio, frame_len, n_rows=n_rows * data_repeats)
 
         if data_repeats > 1:
-            # Collapse each group of data_repeats decoded frames back
-            # into one row via a per-bin median -- the continuous-value
-            # analogue of the header's own bit-level majority voting.
-            expanded = expanded.reshape(n_rows, data_repeats, n_cols)
+            expanded  = expanded.reshape(n_rows, data_repeats, n_cols)
             recovered = np.median(expanded, axis=1)
         else:
             recovered = expanded
 
-        image = invert_preset(recovered, mode_id)
+        image     = invert_preset(recovered, mode_id)
         mode_name = AUDIO_PRESETS.get(mode_id, {}).get('name', f'unknown({mode_id})')
         return image, n_rows, n_cols, mode_name, 'full'
 
-    # Main header didn't validate -- fall back to the thumbnail, which
-    # is independently positioned/sized (fixed constants, doesn't need
-    # anything from the main header) and far more heavily protected
-    # relative to how much it's carrying.
-    thumbnail = decode_thumbnail_block(audio, offset=THUMBNAIL_BLOCK_START)
+    # Main header failed -- fall back to the thumbnail.
+    thumbnail = decode_thumbnail_block(body, offset=_BODY_THUMBNAIL_START)
     return thumbnail, THUMBNAIL_DIM, THUMBNAIL_DIM, 'thumbnail_fallback', 'thumbnail_fallback'
 
 

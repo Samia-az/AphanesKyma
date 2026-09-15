@@ -17,10 +17,58 @@ let liveRecordedBlob = null;
 let rawRecordedFloat32Samples = null;
 let rawRecordedSampleRate = 44100;
 let currentSonificationAudioBlob = null;
-let mediaRecorder = null;
-let audioChunks = [];
 let recordStartTime = 0;
 let recordTimerInterval = null;
+
+// AudioWorklet recorder state
+let workletAudioCtx = null;
+let workletNode = null;
+let workletSourceNode = null;
+let workletMicStream = null;
+let workletPcmChunks = [];   // Float32Array chunks collected from worklet
+let workletIsRecording = false;
+
+/**
+ * Inline AudioWorklet processor source — loaded as a Blob URL.
+ * The processor forwards every 128-sample render quantum to the main
+ * thread as a plain Float32Array message so we accumulate raw PCM
+ * without any codec involvement.
+ */
+const WORKLET_PROCESSOR_CODE = `
+class PcmCaptureProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const ch = inputs[0]?.[0];
+    if (ch && ch.length > 0) {
+      // Defensive copy: transfer a copy so the ring-buffer is not recycled
+      this.port.postMessage(ch.slice(0));
+    }
+    return true; // keep processor alive
+  }
+}
+registerProcessor('pcm-capture-processor', PcmCaptureProcessor);
+`;
+
+/** Create (and cache) an AudioContext for the worklet recorder. */
+async function getOrCreateWorkletAudioCtx() {
+  if (workletAudioCtx && workletAudioCtx.state !== 'closed') {
+    if (workletAudioCtx.state === 'suspended') await workletAudioCtx.resume();
+    return workletAudioCtx;
+  }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({
+    // Prefer 44100 but respect the device default
+    latencyHint: 'interactive'
+  });
+  // Load the inline worklet processor
+  const blob = new Blob([WORKLET_PROCESSOR_CODE], { type: 'application/javascript' });
+  const blobUrl = URL.createObjectURL(blob);
+  try {
+    await ctx.audioWorklet.addModule(blobUrl);
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+  workletAudioCtx = ctx;
+  return ctx;
+}
 
 // ── Tab Switcher: Image2Audio vs Audio2Img ──────────────────────
 function initSonificationTabs() {
@@ -416,136 +464,161 @@ function initAudioToImageFlow() {
   });
 }
 
-// ── Live Microphone Recorder with pure PCM 16-bit WAV Export ────
+// ── Live Microphone Recorder — AudioContext + AudioWorkletNode ───
+//
+// Pipeline:
+//   getUserMedia  ──►  MediaStreamSourceNode
+//                          │
+//                          ▼
+//                   AudioWorkletNode (PcmCaptureProcessor)
+//                          │  port.postMessage(Float32Array chunk)
+//                          ▼
+//                   main thread accumulator  ──►  encodePCM16Wav
+//
+// Every 128-sample render quantum is forwarded as a raw Float32Array
+// message. No codec is ever involved in the recording path.
 function initLiveMicRecorder() {
   const btnRecord = document.getElementById('btn-mic-record');
-  const btnStop = document.getElementById('btn-mic-stop');
-  const statusText = document.getElementById('mic-status-text');
-  const timerText = document.getElementById('mic-timer-text');
+  const btnStop   = document.getElementById('btn-mic-stop');
+  const statusText   = document.getElementById('mic-status-text');
+  const timerText    = document.getElementById('mic-timer-text');
   const playbackWrap = document.getElementById('mic-playback-wrap');
   const audioPreview = document.getElementById('mic-audio-preview');
 
   if (!btnRecord || !btnStop) return;
 
-  let micStream = null;
-
+  // ── Start recording ──────────────────────────────────────────
   btnRecord.addEventListener('click', async () => {
+    if (workletIsRecording) return;
+
     try {
+      // ① Request raw mic access (disable browser DSP)
       const audioConstraints = {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
+        echoCancellation:   false,
+        noiseSuppression:   false,
+        autoGainControl:    false,
         googEchoCancellation: false,
-        googAutoGainControl: false,
+        googAutoGainControl:  false,
         googNoiseSuppression: false,
-        googHighpassFilter: false
+        googHighpassFilter:   false
       };
-
       try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+        workletMicStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       } catch (_) {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        workletMicStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       }
 
-      audioChunks = [];
+      // ② Build / resume the AudioContext and register the worklet
+      const ctx = await getOrCreateWorkletAudioCtx();
+      rawRecordedSampleRate = ctx.sampleRate;
+      workletPcmChunks = [];
 
-      let options = {};
-      if (MediaRecorder.isTypeSupported('audio/webm')) {
-        options.mimeType = 'audio/webm';
-      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
-        options.mimeType = 'audio/mp4';
-      }
+      // ③ Wire: mic source → worklet node → (no output needed)
+      workletSourceNode = ctx.createMediaStreamSource(workletMicStream);
+      workletNode = new AudioWorkletNode(ctx, 'pcm-capture-processor', {
+        numberOfInputs:  1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1]
+      });
 
-      mediaRecorder = new MediaRecorder(micStream, options);
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          audioChunks.push(e.data);
+      // ④ Collect raw Float32 chunks on the main thread
+      workletNode.port.onmessage = (ev) => {
+        if (workletIsRecording && ev.data instanceof Float32Array) {
+          workletPcmChunks.push(ev.data);
         }
       };
 
-      mediaRecorder.start(100);
+      workletSourceNode.connect(workletNode);
+      // Connect to destination with zero gain so the AudioContext
+      // keeps running even when no other node is connected.
+      const silentGain = ctx.createGain();
+      silentGain.gain.value = 0;
+      workletNode.connect(silentGain);
+      silentGain.connect(ctx.destination);
 
+      workletIsRecording = true;
+
+      // ⑤ Optionally play the sonification source in sync
       const chkAutoPlay = document.getElementById('chk-auto-play-source');
-      const sonPlayer = document.getElementById('son-audio-player');
-      if (chkAutoPlay && chkAutoPlay.checked && sonPlayer && sonPlayer.src) {
+      const sonPlayer   = document.getElementById('son-audio-player');
+      if (chkAutoPlay?.checked && sonPlayer?.src) {
         sonPlayer.currentTime = 0;
         sonPlayer.play().catch(() => {});
       }
 
       btnRecord.disabled = true;
-      btnStop.disabled = false;
+      btnStop.disabled   = false;
       statusText.textContent = 'Recording in progress...';
       statusText.style.color = '#0ff8e7';
 
       recordStartTime = Date.now();
       recordTimerInterval = setInterval(() => {
-        const elapsedSec = Math.floor((Date.now() - recordStartTime) / 1000);
-        const mins = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
-        const secs = String(elapsedSec % 60).padStart(2, '0');
-        timerText.textContent = `${mins}:${secs}`;
+        const elapsed = Math.floor((Date.now() - recordStartTime) / 1000);
+        const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+        const ss = String(elapsed % 60).padStart(2, '0');
+        timerText.textContent = `${mm}:${ss}`;
       }, 500);
-
-      btnStop.onclick = () => {
-        clearInterval(recordTimerInterval);
-
-        if (sonPlayer) {
-          sonPlayer.pause();
-        }
-
-        mediaRecorder.onstop = async () => {
-          if (micStream) {
-            micStream.getTracks().forEach(track => track.stop());
-          }
-
-          statusText.textContent = 'Processing recorded audio...';
-          const rawBlob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-
-          try {
-            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') {
-              await audioCtx.resume();
-            }
-
-            const arrayBuffer = await rawBlob.arrayBuffer();
-            const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-
-            rawRecordedFloat32Samples = audioBuffer.getChannelData(0);
-            rawRecordedSampleRate = audioBuffer.sampleRate;
-
-            liveRecordedBlob = encodePCM16Wav(rawRecordedFloat32Samples, rawRecordedSampleRate);
-            const audioUrl = URL.createObjectURL(liveRecordedBlob);
-
-            audioPreview.src = audioUrl;
-            audioPreview.load();
-            playbackWrap.hidden = false;
-
-            const totalDurationSec = audioBuffer.duration;
-            setupAudioTrimmerSliders(totalDurationSec);
-
-            statusText.textContent = 'Recording Captured';
-            statusText.style.color = '#10b981';
-            audioCtx.close();
-            showToast('Mic audio captured & ready to play!', 'success');
-
-          } catch (errDecode) {
-            console.error('Audio decode error, falling back to raw blob:', errDecode);
-            liveRecordedBlob = rawBlob;
-            audioPreview.src = URL.createObjectURL(rawBlob);
-            audioPreview.load();
-            playbackWrap.hidden = false;
-            statusText.textContent = 'Recording Captured';
-            statusText.style.color = '#10b981';
-          } finally {
-            btnRecord.disabled = false;
-            btnStop.disabled = true;
-          }
-        };
-
-        mediaRecorder.stop();
-      };
 
     } catch (err) {
       showToast('Microphone access error: ' + err.message, 'error');
+    }
+  });
+
+  // ── Stop recording ───────────────────────────────────────────
+  btnStop.addEventListener('click', async () => {
+    if (!workletIsRecording) return;
+
+    clearInterval(recordTimerInterval);
+    workletIsRecording = false;
+
+    // Pause optional source player
+    const sonPlayer = document.getElementById('son-audio-player');
+    if (sonPlayer) sonPlayer.pause();
+
+    // Disconnect worklet graph
+    try { workletSourceNode?.disconnect(); } catch (_) {}
+    try { workletNode?.disconnect();       } catch (_) {}
+
+    // Stop mic tracks
+    workletMicStream?.getTracks().forEach(t => t.stop());
+
+    btnRecord.disabled = false;
+    btnStop.disabled   = true;
+    statusText.textContent = 'Processing recorded audio...';
+
+    try {
+      // ⑥ Flatten all Float32Array chunks into one typed array
+      const totalSamples = workletPcmChunks.reduce((acc, c) => acc + c.length, 0);
+      if (totalSamples === 0) throw new Error('No audio samples captured');
+
+      const merged = new Float32Array(totalSamples);
+      let offset = 0;
+      for (const chunk of workletPcmChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      rawRecordedFloat32Samples = merged;
+
+      // ⑦ Encode to PCM-16 WAV — pure JS, no codec
+      liveRecordedBlob = encodePCM16Wav(rawRecordedFloat32Samples, rawRecordedSampleRate);
+      const audioUrl  = URL.createObjectURL(liveRecordedBlob);
+
+      audioPreview.src = audioUrl;
+      audioPreview.load();
+      playbackWrap.hidden = false;
+
+      const totalDurationSec = rawRecordedFloat32Samples.length / rawRecordedSampleRate;
+      setupAudioTrimmerSliders(totalDurationSec);
+
+      statusText.textContent = 'Recording Captured';
+      statusText.style.color = '#10b981';
+      showToast('Mic audio captured & ready to play!', 'success');
+
+    } catch (err) {
+      statusText.textContent = 'Capture failed';
+      statusText.style.color = '#ef4444';
+      showToast('Recording error: ' + err.message, 'error');
     }
   });
 }

@@ -288,6 +288,7 @@ async def api_image_to_audio(
             wf.setsampwidth(2)
             wf.setframerate(SAMPLE_RATE)
             wf.writeframes(audio_int16.tobytes())
+            print("Original: (channel,sampwidth,framerate,frames) 1 2 ",SAMPLE_RATE,audio_int16.shape )
 
         from fastapi.background import BackgroundTasks
         background_tasks = BackgroundTasks()
@@ -329,6 +330,7 @@ async def api_audio_to_image(
             framerate = wf.getframerate()
             n_frames = wf.getnframes()
             raw_bytes = wf.readframes(n_frames)
+            print("Recoreded: (channel,sampwidth,framerate,frames)",n_channels,sampwidth,framerate, n_frames)
 
         if sampwidth == 2:
             samples = np.frombuffer(raw_bytes, dtype=np.int16).astype(np.float64) / 32767.0
