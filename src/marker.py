@@ -36,8 +36,7 @@ def make_marker(sample_rate=SAMPLE_RATE, length=MARKER_LEN, f0=MARKER_F0, f1=MAR
     return chirp * window
 
 
-def find_marker_offset(audio, marker=None, search_seconds=5.0,
-                        target_rate=SAMPLE_RATE, min_score=0.5):
+def find_marker_offset(audio,marker=None,search_seconds=5.0,target_rate=SAMPLE_RATE,min_score=0.40,):
     """Returns the offset where the marker ENDS (i.e. where the header
     begins), or None if no sufficiently strong match was found."""
     if marker is None:

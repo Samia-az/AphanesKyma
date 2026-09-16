@@ -129,12 +129,27 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     )
 
     # Bounded search (fast path: covers normal pre-roll up to search_seconds)
-    offset = find_marker_offset(resampled, search_seconds=search_seconds)
+    # Bounded search for preamble marker
+    offset = find_marker_offset(
+        resampled, search_seconds=search_seconds, min_score=0.45
+    )
 
+    # Fallback pass with lower threshold if room acoustics blunted the correlation peak
+    if offset is None:
+        _log.info(
+            "capture_decode: Retrying marker search with lower threshold (0.35)..."
+        )
+        offset = find_marker_offset(
+            resampled, search_seconds=search_seconds, min_score=0.35
+        )
 
-    # Search a ±64 sample neighborhood around the detected offset for exact alignment
-    # Ensure fine-tuning ONLY searches forward from the detected marker end (offset >= marker_end)
-    # to prevent marker chirp tail samples from bleeding into Header Copy 0.
+    # MUST GUARD HERE: Stop immediately if no marker was found before doing arithmetic
+    if offset is None:
+        raise ValueError(
+            "Could not locate a valid header marker in the captured audio."
+        )
+
+    # Fine-tuning alignment search (now safe from NoneType TypeError)
     best_valid_offset = None
     best_pilot_sum = -1.0
 
@@ -143,7 +158,7 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     )
     n_chunks = -(-total_data_bits // 4)
 
-    for delta in range(0, 33):  # Search [0, +32] samples forward from marker end
+    for delta in range(0, 33):
         test_offset = offset + delta
         if (
             test_offset < 0
@@ -177,7 +192,6 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
                     for m in mags
                     for c in range(n_chunks)
                 )
-
                 if pilot_sum > best_pilot_sum:
                     best_pilot_sum = pilot_sum
                     best_valid_offset = test_offset
