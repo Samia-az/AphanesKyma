@@ -40,6 +40,7 @@ from header_fft import (
     _read_header_majority_vote,
     _is_valid_header_fields,
     audio_with_header_to_image,
+    _decode_body,
 )
 
 
@@ -160,4 +161,11 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
         "capture_decode: header confirmed at sample %d (%.3fs into recording)",
         offset, offset / SAMPLE_RATE
     )
-    return audio_with_header_to_image(resampled[offset:])
+    # NOTE: resampled[offset:] already has the marker stripped -- offset
+    # IS the header start (see module docstring / find_marker_offset).
+    # audio_with_header_to_image() expects audio that STILL has the
+    # marker at sample 0 and strips MARKER_LEN itself; calling it here
+    # used to skip an extra MARKER_LEN samples past the real header and
+    # into the thumbnail block. _decode_body() is the marker-agnostic
+    # half of that function -- call it directly on already-stripped audio.
+    return _decode_body(resampled[offset:])

@@ -71,6 +71,7 @@ MAX_DATA_REPEATS = (1 << HEADER_DATA_REPEATS_BITS) - 1
 
 
 
+# --- make_header_frame: add one always-on pilot bin per 7-bit chunk ---
 def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40.0):
     bits = np.concatenate([
         int_to_bits(n_rows, HEADER_BITS_PER_VALUE),
@@ -78,30 +79,43 @@ def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40
         int_to_bits(mode_id, HEADER_MODE_BITS),
         int_to_bits(data_repeats, HEADER_DATA_REPEATS_BITS),
     ])
-    coded = bits_to_hamming_stream(bits)
+    coded = bits_to_hamming_stream(bits)          # length = n_chunks * 7
+    n_chunks = len(coded) // 7
 
-    if HEADER_BIN_OFFSET + len(coded) > HEADER_N_COLS:
+    # Lay out as [7 data bins, 1 pilot bin] per chunk, so every chunk
+    # carries its own always-on amplitude reference right next to its
+    # data -- a chunk whose real bits are all zero still has something
+    # to threshold against, and the reference reflects THIS chunk's
+    # frequency-local channel gain rather than some other chunk's.
+    n_slots = n_chunks * 8
+    if HEADER_BIN_OFFSET + n_slots > HEADER_N_COLS:
         raise ValueError("Header doesn't fit in HEADER_FRAME_LEN; increase it.")
 
     magnitude = np.zeros(HEADER_N_COLS)
-    magnitude[HEADER_BIN_OFFSET:HEADER_BIN_OFFSET + len(coded)] = coded * on_amplitude
+    for c in range(n_chunks):
+        data_slice = coded[c * 7:(c + 1) * 7]
+        base = HEADER_BIN_OFFSET + c * 8
+        magnitude[base:base + 7] = data_slice * on_amplitude
+        magnitude[base + 7] = on_amplitude   # pilot, always on
 
     spectrum = magnitude.astype(np.complex128)
     frame = np.fft.irfft(spectrum, n=HEADER_FRAME_LEN)
     return frame
 
 
-def read_header_frame(frame, threshold_ratio=0.5):
-    spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
-    magnitude = np.abs(spectrum)
-
+def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
+    """Shared decode logic, factored out so it can run on either a
+    single frame's magnitude spectrum or an averaged one."""
     total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
     n_chunks = -(-total_data_bits // 4)
-    n_coded_bits = n_chunks * 7
-    coded_region = magnitude[HEADER_BIN_OFFSET:HEADER_BIN_OFFSET + n_coded_bits]
 
-    thresh = coded_region.max() * threshold_ratio if coded_region.max() > 0 else 0
-    coded_bits = (coded_region > thresh).astype(int)
+    coded_bits = np.zeros(n_chunks * 7, dtype=int)
+    for c in range(n_chunks):
+        base = HEADER_BIN_OFFSET + c * 8
+        data_slice = magnitude[base:base + 7]
+        pilot = magnitude[base + 7]
+        local_thresh = pilot * threshold_ratio
+        coded_bits[c * 7:(c + 1) * 7] = (data_slice > local_thresh).astype(int)
 
     bits = hamming_stream_to_bits(coded_bits, n_chunks * 4)
     n_rows = bits_to_int(bits[:HEADER_BITS_PER_VALUE])
@@ -111,6 +125,29 @@ def read_header_frame(frame, threshold_ratio=0.5):
                                      2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS])
     return n_rows, n_cols, mode_id, data_repeats
 
+
+def read_header_frame(frame, threshold_ratio=0.5):
+    spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
+    return _decode_from_magnitude(np.abs(spectrum), threshold_ratio)
+
+
+def _read_header_majority_vote(audio, offset=0):
+    """Average the HEADER_REPEATS copies' magnitude spectra bin-by-bin
+    before decoding, rather than decoding each copy separately and
+    voting on the final integers. Bin-level averaging lets copies that
+    are each partially corrupted reinforce each other; integer-level
+    voting only helps when at least two copies land on the exact same
+    final value, which noisy channels often never give you."""
+    mags = []
+    for i in range(HEADER_REPEATS):
+        start = offset + i * HEADER_FRAME_LEN
+        segment = audio[start:start + HEADER_FRAME_LEN]
+        if len(segment) < HEADER_FRAME_LEN:
+            return -1, -1, -1, -1
+        mags.append(np.abs(np.fft.rfft(segment, n=HEADER_FRAME_LEN)))
+
+    avg_magnitude = np.mean(mags, axis=0)
+    return _decode_from_magnitude(avg_magnitude)
 
 # --------------------------------------------------------------------------
 # Audio presets
@@ -282,19 +319,15 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     return full_audio
 
 
+MAX_PLAUSIBLE_COLS = 256
+MAX_PLAUSIBLE_ROWS = 256
+
 def _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, max_frame_len):
-    """Shared sanity check for a decoded (n_rows, n_cols, mode_id,
-    data_repeats) quadruple. Under noise (or, for captured audio, simple
-    misalignment) the header can decode to nonsensical values -- e.g.
-    because the Hamming code corrected the wrong bit for a multi-bit
-    error it can't actually fix. Used both by the normal decode path (to
-    fail clearly / fall back to the thumbnail rather than try to process
-    garbage dimensions) and by find_header_offset() in capture_decode.py
-    (to tell a correctly-aligned header apart from noise/misalignment
-    while searching)."""
-    if n_cols < 2 or 2 * (n_cols - 1) > max_frame_len:
+    if n_cols < 2 or n_cols > MAX_PLAUSIBLE_COLS or 2 * (n_cols - 1) > max_frame_len:
         return False
-    if n_rows < 1 or n_rows > 100000:
+    if n_rows < 1 or n_rows > MAX_PLAUSIBLE_ROWS:
+        return False
+    if mode_id not in AUDIO_PRESETS:
         return False
     if not (1 <= data_repeats <= MAX_DATA_REPEATS):
         return False
@@ -303,7 +336,9 @@ def _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, max_frame_len
 
 def audio_with_header_to_image(audio):
     """
-    Decode audio -> image.
+    Decode audio -> image, for audio that STILL HAS the marker preamble
+    at sample 0 (the normal clean round-trip case: WAV samples read
+    straight from a file you encoded).
 
     Expected audio layout (from sample 0 of the WAV):
       [marker : MARKER_LEN]
@@ -311,21 +346,37 @@ def audio_with_header_to_image(audio):
       [thumbnail block : THUMBNAIL_BLOCK_LEN]
       [data audio]
 
-    For clean round-trips (file upload) pass the WAV samples directly.
-    For captured audio pass `audio[marker_end:]` where marker_end is
-    returned by marker.find_marker_offset().
+    For captured audio -- where marker.find_marker_offset() has already
+    been used to locate and logically strip the marker -- call
+    _decode_body() directly with audio starting at the header (i.e.
+    `resampled[offset:]` where offset is find_marker_offset()'s return
+    value). Do NOT pass that here: this function strips another
+    MARKER_LEN samples internally, which would skip straight past the
+    real header into the thumbnail block. That mismatch was the actual
+    bug behind the corrupted capture-decode header reads -- see
+    capture_decode.py.
 
     Returns (image, n_rows, n_cols, mode_name, source).
       source='full'               -- full data channel decoded.
       source='thumbnail_fallback' -- fell back to thumbnail preview.
     """
     # Strip marker; everything below is in body-relative coordinates.
-    body = audio[MARKER_LEN:]
+    return _decode_body(audio[MARKER_LEN:])
 
-    # Body layout:
-    #   [0 .. HEADER_FRAME_LEN*HEADER_REPEATS)   -- header copies
-    #   [HEADER_FRAME_LEN*HEADER_REPEATS ..)      -- thumbnail block
-    #   [HEADER_FRAME_LEN*HEADER_REPEATS + THUMBNAIL_BLOCK_LEN ..) -- data
+
+def _decode_body(body):
+    """Decode audio -> image, for audio where the marker has ALREADY
+    been stripped (sample 0 == start of the header). This is what
+    audio_with_header_to_image() calls internally after its own strip,
+    and what captured-audio callers (capture_decode.py) should call
+    directly, since their `offset` from find_marker_offset() already
+    points past the marker.
+
+    Body layout:
+      [0 .. HEADER_FRAME_LEN*HEADER_REPEATS)   -- header copies
+      [HEADER_FRAME_LEN*HEADER_REPEATS ..)      -- thumbnail block
+      [HEADER_FRAME_LEN*HEADER_REPEATS + THUMBNAIL_BLOCK_LEN ..) -- data
+    """
     _BODY_THUMBNAIL_START = HEADER_FRAME_LEN * HEADER_REPEATS
     _BODY_DATA_START      = _BODY_THUMBNAIL_START + THUMBNAIL_BLOCK_LEN
 
@@ -351,34 +402,9 @@ def audio_with_header_to_image(audio):
     thumbnail = decode_thumbnail_block(body, offset=_BODY_THUMBNAIL_START)
     return thumbnail, THUMBNAIL_DIM, THUMBNAIL_DIM, 'thumbnail_fallback', 'thumbnail_fallback'
 
-
-def _read_header_majority_vote(audio, offset=0):
-    """Read all HEADER_REPEATS copies of the header starting at `offset`
-    samples into `audio`, decode each independently, and majority-vote
-    each field. This survives noise that badly corrupts one or two
-    copies (e.g. clipping, which hits the header harder than the data
-    audio) as long as a majority of copies still decode correctly.
-
-    `offset` defaults to 0 (the normal case: audio you encoded/wrote
-    yourself, header at the very start). capture_decode.py's search
-    passes different candidate offsets to find where a real mic
-    recording's header actually begins."""
-    from collections import Counter
-
-    votes_rows, votes_cols, votes_mode, votes_repeats = [], [], [], []
-    for i in range(HEADER_REPEATS):
-        start = offset + i * HEADER_FRAME_LEN
-        segment = audio[start:start + HEADER_FRAME_LEN]
-        if len(segment) < HEADER_FRAME_LEN:
-            return -1, -1, -1, -1  # not enough audio left at this offset
-        n_rows, n_cols, mode_id, data_repeats = read_header_frame(segment)
-        votes_rows.append(n_rows)
-        votes_cols.append(n_cols)
-        votes_mode.append(mode_id)
-        votes_repeats.append(data_repeats)
-
-    n_rows = Counter(votes_rows).most_common(1)[0][0]
-    n_cols = Counter(votes_cols).most_common(1)[0][0]
-    mode_id = Counter(votes_mode).most_common(1)[0][0]
-    data_repeats = Counter(votes_repeats).most_common(1)[0][0]
-    return n_rows, n_cols, mode_id, data_repeats
+# NOTE: a second _read_header_majority_vote used to be defined here, doing
+# per-copy decode + per-field Counter-based majority voting. It silently
+# shadowed the bin-averaging version above (see that function's docstring
+# for why bin-averaging is the intended, more robust approach) and was
+# actually the one running in production. Removed -- the bin-averaging
+# version above is now the only definition.
