@@ -38,6 +38,8 @@ HEADER_BIN_OFFSET = 32   # ~3000 Hz -- empirically, bins below ~2.6kHz get
                           # mic rumble filter / room resonance), even though
                           # HEADER_N_COLS has plenty of unused headroom above
                           # where the header actually needs to live.
+MAX_PLAUSIBLE_COLS = 256
+MAX_PLAUSIBLE_ROWS = 256
 
 import numpy as np
 from collections import Counter
@@ -105,60 +107,83 @@ def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40
 
 
 def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
-    """Shared decode logic, factored out so it can run on either a
-    single frame's magnitude spectrum or an averaged one."""
-    total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
+    total_data_bits = (
+        2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
+    )
     n_chunks = -(-total_data_bits // 4)
+
+    # Calculate median pilot magnitude across all header chunks to establish a noise floor
+    pilots = [
+        magnitude[HEADER_BIN_OFFSET + c * 8 + 7] for c in range(n_chunks)
+    ]
+    median_pilot = np.median(pilots)
+
+    # Floor the pilot threshold so room nulls do not drop the threshold to zero
+    min_pilot_floor = max(median_pilot * 0.35, 1e-4)
 
     coded_bits = np.zeros(n_chunks * 7, dtype=int)
     for c in range(n_chunks):
         base = HEADER_BIN_OFFSET + c * 8
-        data_slice = magnitude[base:base + 7]
-        pilot = magnitude[base + 7]
+        data_slice = magnitude[base : base + 7]
+        pilot = max(magnitude[base + 7], min_pilot_floor)
         local_thresh = pilot * threshold_ratio
-        coded_bits[c * 7:(c + 1) * 7] = (data_slice > local_thresh).astype(int)
+        coded_bits[c * 7 : (c + 1) * 7] = (data_slice > local_thresh).astype(
+            int
+        )
 
     bits = hamming_stream_to_bits(coded_bits, n_chunks * 4)
     n_rows = bits_to_int(bits[:HEADER_BITS_PER_VALUE])
-    n_cols = bits_to_int(bits[HEADER_BITS_PER_VALUE:2 * HEADER_BITS_PER_VALUE])
-    mode_id = bits_to_int(bits[2 * HEADER_BITS_PER_VALUE:2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS])
-    data_repeats = bits_to_int(bits[2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS:
-                                     2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS])
+    n_cols = bits_to_int(
+        bits[HEADER_BITS_PER_VALUE : 2 * HEADER_BITS_PER_VALUE]
+    )
+    mode_id = bits_to_int(
+        bits[
+            2
+            * HEADER_BITS_PER_VALUE : 2
+            * HEADER_BITS_PER_VALUE
+            + HEADER_MODE_BITS
+        ]
+    )
+    data_repeats = bits_to_int(
+        bits[
+            2 * HEADER_BITS_PER_VALUE
+            + HEADER_MODE_BITS : 2 * HEADER_BITS_PER_VALUE
+            + HEADER_MODE_BITS
+            + HEADER_DATA_REPEATS_BITS
+        ]
+    )
     return n_rows, n_cols, mode_id, data_repeats
 
 
+def _read_header_majority_vote(audio, offset=0):
+    """Decode each copy independently and take a field-level majority vote across copies."""
+    copies = []
+    for i in range(HEADER_REPEATS):
+        start = offset + i * HEADER_FRAME_LEN
+        segment = audio[start : start + HEADER_FRAME_LEN]
+        if len(segment) < HEADER_FRAME_LEN:
+            continue
+        r_rows, r_cols, r_mode, r_rep = read_header_frame(segment)
+        copies.append((r_rows, r_cols, r_mode, r_rep))
+
+    if not copies:
+        return -1, -1, -1, -1
+
+    def get_majority(idx):
+        vals = [c[idx] for c in copies]
+        counts = Counter(vals)
+        return counts.most_common(1)[0][0]
+
+    return (
+        get_majority(0),
+        get_majority(1),
+        get_majority(2),
+        get_majority(3),
+    )
 def read_header_frame(frame, threshold_ratio=0.5):
     spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
     return _decode_from_magnitude(np.abs(spectrum), threshold_ratio)
 
-
-def _read_header_majority_vote(audio, offset=0):
-    """For each 8-bin chunk, pick whichever of the HEADER_REPEATS copies
-    has the strongest pilot in that chunk, rather than averaging magnitude
-    across copies. Plain averaging is the right combining rule for additive
-    noise, but wrong for frequency-selective fading: a comb-filter/room
-    null can zero out one chunk's band in some copies while leaving it
-    clean in another, and averaging drags the clean copy down with the
-    corrupted ones instead of just using it."""
-    total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
-    n_chunks = -(-total_data_bits // 4)
-
-    mags = []
-    for i in range(HEADER_REPEATS):
-        start = offset + i * HEADER_FRAME_LEN
-        segment = audio[start:start + HEADER_FRAME_LEN]
-        if len(segment) < HEADER_FRAME_LEN:
-            return -1, -1, -1, -1
-        mags.append(np.abs(np.fft.rfft(segment, n=HEADER_FRAME_LEN)))
-
-    best_magnitude = np.zeros_like(mags[0])
-    for c in range(n_chunks):
-        base = HEADER_BIN_OFFSET + c * 8
-        pilots = [m[base + 7] for m in mags]
-        best = int(np.argmax(pilots))
-        best_magnitude[base:base + 8] = mags[best][base:base + 8]
-
-    return _decode_from_magnitude(best_magnitude)
 
 # --------------------------------------------------------------------------
 # Audio presets
@@ -330,8 +355,7 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     return full_audio
 
 
-MAX_PLAUSIBLE_COLS = 256
-MAX_PLAUSIBLE_ROWS = 256
+
 
 def _is_valid_header_fields(n_rows, n_cols, mode_id, data_repeats, max_frame_len):
     if n_cols < 2 or n_cols > MAX_PLAUSIBLE_COLS or 2 * (n_cols - 1) > max_frame_len:

@@ -38,6 +38,9 @@ from header_fft import (
     HEADER_FRAME_LEN,
     HEADER_REPEATS,
     HEADER_BIN_OFFSET,
+    HEADER_BITS_PER_VALUE,
+    HEADER_MODE_BITS,
+    HEADER_DATA_REPEATS_BITS,
     _read_header_majority_vote,
     _is_valid_header_fields,
     audio_with_header_to_image,
@@ -128,34 +131,54 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     # Bounded search (fast path: covers normal pre-roll up to search_seconds)
     offset = find_marker_offset(resampled, search_seconds=search_seconds)
 
-    # In capture_decode.py, replace the initial offset check with a fine-tuning search:
 
-    best_valid_offset = None
-    best_pilot_sum = -1.0
+    # Search a ±64 sample neighborhood around the detected offset for exact alignment
+    best_offset = offset
+    best_score = -1.0
 
-    # Search a small neighborhood around the detected offset for jitter compensation
-    for delta in range(-10, 11):
+    total_data_bits = (
+        2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
+    )
+    n_chunks = -(-total_data_bits // 4)
+
+    for delta in range(-64, 65):
         test_offset = offset + delta
-        if test_offset < 0 or test_offset + HEADER_FRAME_LEN * HEADER_REPEATS > len(resampled):
-            continue
-        
-        # Quick validation test
-        try:
-            r_rows, r_cols, r_mode, r_rep = _read_header_majority_vote(resampled, offset=test_offset)
-            available_data = len(resampled) - test_offset - _BODY_DATA_START
-            if _is_valid_header_fields(r_rows, r_cols, r_mode, r_rep, available_data):
-                # If valid, score by pilot magnitude sum
-                mags = [np.abs(np.fft.rfft(resampled[test_offset + i*HEADER_FRAME_LEN : test_offset + (i+1)*HEADER_FRAME_LEN], n=HEADER_FRAME_LEN)) for i in range(HEADER_REPEATS)]
-                pilot_sum = sum(m[HEADER_BIN_OFFSET + c * 8 + 7] for m in mags for c in range(5))
-                if pilot_sum > best_pilot_sum:
-                    best_pilot_sum = pilot_sum
-                    best_valid_offset = test_offset
-        except Exception:
+        if (
+            test_offset < 0
+            or test_offset + HEADER_FRAME_LEN * HEADER_REPEATS > len(resampled)
+        ):
             continue
 
-    if best_valid_offset is not None:
-        offset = best_valid_offset
-        _log.info("capture_decode: fine-tuned marker offset to sample %d", offset)
+        mags = []
+        for i in range(HEADER_REPEATS):
+            start = test_offset + i * HEADER_FRAME_LEN
+            seg = resampled[start : start + HEADER_FRAME_LEN]
+            if len(seg) == HEADER_FRAME_LEN:
+                mags.append(np.abs(np.fft.rfft(seg, n=HEADER_FRAME_LEN)))
+
+        if len(mags) < HEADER_REPEATS:
+            continue
+
+        # Score alignment by pilot bin energy sum
+        pilot_bins = [HEADER_BIN_OFFSET + c * 8 + 7 for c in range(n_chunks)]
+        pilot_energy = sum(m[b] for m in mags for b in pilot_bins)
+
+        # Validate header fields at candidate offset
+        r_rows, r_cols, r_mode, r_rep = _read_header_majority_vote(
+            resampled, offset=test_offset
+        )
+        available_data = len(resampled) - test_offset - _BODY_DATA_START
+        valid = _is_valid_header_fields(
+            r_rows, r_cols, r_mode, r_rep, available_data
+        )
+
+        score = (10000.0 if valid else 0.0) + pilot_energy
+        if score > best_score:
+            best_score = score
+            best_offset = test_offset
+
+    offset = best_offset
+    _log.info("capture_decode: fine-tuned marker offset to sample %d", offset)
 
 
     if offset is None:
