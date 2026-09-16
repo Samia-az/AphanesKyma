@@ -40,6 +40,7 @@ HEADER_BIN_OFFSET = 32   # ~3000 Hz -- empirically, bins below ~2.6kHz get
                           # where the header actually needs to live.
 
 import numpy as np
+from collections import Counter
 from image_audio_fft import image_to_audio, audio_to_image, SAMPLE_RATE
 from marker import make_marker, MARKER_AMPLITUDE_SCALE, MARKER_LEN
 from hamming_bits import (

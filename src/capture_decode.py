@@ -134,7 +134,7 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     best_pilot_sum = -1.0
 
     # Search a small neighborhood around the detected offset for jitter compensation
-    for delta in range(-4, 5):
+    for delta in range(-10, 11):
         test_offset = offset + delta
         if test_offset < 0 or test_offset + HEADER_FRAME_LEN * HEADER_REPEATS > len(resampled):
             continue
