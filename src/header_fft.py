@@ -26,6 +26,18 @@ header-only scheme:
     preview instead of raising -- a probability FLOOR on getting some
     recognizable image back, distinct from data_repeats' quality boost.
 """
+HEADER_FRAME_LEN = 512          # fixed & known
+HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
+HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
+HEADER_DATA_REPEATS_BITS = 4    # bits used to encode data_repeats (1-15)
+HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
+HEADER_REPEATS = 3
+HEADER_AMPLITUDE_SCALE = 0.35
+HEADER_BIN_OFFSET = 32   # ~3000 Hz -- empirically, bins below ~2.6kHz get
+                          # destroyed by the acoustic path (speaker rolloff /
+                          # mic rumble filter / room resonance), even though
+                          # HEADER_N_COLS has plenty of unused headroom above
+                          # where the header actually needs to live.
 
 import numpy as np
 from image_audio_fft import image_to_audio, audio_to_image, SAMPLE_RATE
@@ -42,18 +54,6 @@ from thumbnail_channel import (
 
 
 
-HEADER_FRAME_LEN = 512          # fixed & known
-HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
-HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
-HEADER_DATA_REPEATS_BITS = 4    # bits used to encode data_repeats (1-15)
-HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
-HEADER_REPEATS = 3
-HEADER_AMPLITUDE_SCALE = 0.35
-HEADER_BIN_OFFSET = 32   # ~3000 Hz -- empirically, bins below ~2.6kHz get
-                          # destroyed by the acoustic path (speaker rolloff /
-                          # mic rumble filter / room resonance), even though
-                          # HEADER_N_COLS has plenty of unused headroom above
-                          # where the header actually needs to live.
 # Audio layout (sample offsets, all at SAMPLE_RATE):
 #   [marker : MARKER_LEN] + [header × HEADER_REPEATS] + [thumbnail × THUMBNAIL_REPEATS] + [data]
 MARKER_BLOCK_START    = 0
@@ -132,12 +132,16 @@ def read_header_frame(frame, threshold_ratio=0.5):
 
 
 def _read_header_majority_vote(audio, offset=0):
-    """Average the HEADER_REPEATS copies' magnitude spectra bin-by-bin
-    before decoding, rather than decoding each copy separately and
-    voting on the final integers. Bin-level averaging lets copies that
-    are each partially corrupted reinforce each other; integer-level
-    voting only helps when at least two copies land on the exact same
-    final value, which noisy channels often never give you."""
+    """For each 8-bin chunk, pick whichever of the HEADER_REPEATS copies
+    has the strongest pilot in that chunk, rather than averaging magnitude
+    across copies. Plain averaging is the right combining rule for additive
+    noise, but wrong for frequency-selective fading: a comb-filter/room
+    null can zero out one chunk's band in some copies while leaving it
+    clean in another, and averaging drags the clean copy down with the
+    corrupted ones instead of just using it."""
+    total_data_bits = 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
+    n_chunks = -(-total_data_bits // 4)
+
     mags = []
     for i in range(HEADER_REPEATS):
         start = offset + i * HEADER_FRAME_LEN
@@ -146,8 +150,14 @@ def _read_header_majority_vote(audio, offset=0):
             return -1, -1, -1, -1
         mags.append(np.abs(np.fft.rfft(segment, n=HEADER_FRAME_LEN)))
 
-    avg_magnitude = np.mean(mags, axis=0)
-    return _decode_from_magnitude(avg_magnitude)
+    best_magnitude = np.zeros_like(mags[0])
+    for c in range(n_chunks):
+        base = HEADER_BIN_OFFSET + c * 8
+        pilots = [m[base + 7] for m in mags]
+        best = int(np.argmax(pilots))
+        best_magnitude[base:base + 8] = mags[best][base:base + 8]
+
+    return _decode_from_magnitude(best_magnitude)
 
 # --------------------------------------------------------------------------
 # Audio presets

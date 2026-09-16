@@ -37,11 +37,16 @@ from marker import find_marker_offset
 from header_fft import (
     HEADER_FRAME_LEN,
     HEADER_REPEATS,
+    HEADER_BIN_OFFSET,
     _read_header_majority_vote,
     _is_valid_header_fields,
     audio_with_header_to_image,
     _decode_body,
+    THUMBNAIL_BLOCK_LEN,
+    read_header_frame, MARKER_LEN 
 )
+
+_BODY_DATA_START = HEADER_FRAME_LEN * HEADER_REPEATS + THUMBNAIL_BLOCK_LEN
 
 
 def resample_to_target_rate(audio, native_rate, target_rate=SAMPLE_RATE):
@@ -123,16 +128,35 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     # Bounded search (fast path: covers normal pre-roll up to search_seconds)
     offset = find_marker_offset(resampled, search_seconds=search_seconds)
 
-    if offset is None:
-        # Full-recording fallback: if the user had an unusually long pre-roll
-        # (e.g. pressed Play well after Record), try scanning the whole file.
-        full_seconds = len(resampled) / SAMPLE_RATE
-        if full_seconds > search_seconds:
-            _log.info(
-                "capture_decode: bounded search failed; retrying with full scan (%.1fs)",
-                full_seconds
-            )
-            offset = find_marker_offset(resampled, search_seconds=full_seconds)
+    # In capture_decode.py, replace the initial offset check with a fine-tuning search:
+
+    best_valid_offset = None
+    best_pilot_sum = -1.0
+
+    # Search a small neighborhood around the detected offset for jitter compensation
+    for delta in range(-4, 5):
+        test_offset = offset + delta
+        if test_offset < 0 or test_offset + HEADER_FRAME_LEN * HEADER_REPEATS > len(resampled):
+            continue
+        
+        # Quick validation test
+        try:
+            r_rows, r_cols, r_mode, r_rep = _read_header_majority_vote(resampled, offset=test_offset)
+            available_data = len(resampled) - test_offset - _BODY_DATA_START
+            if _is_valid_header_fields(r_rows, r_cols, r_mode, r_rep, available_data):
+                # If valid, score by pilot magnitude sum
+                mags = [np.abs(np.fft.rfft(resampled[test_offset + i*HEADER_FRAME_LEN : test_offset + (i+1)*HEADER_FRAME_LEN], n=HEADER_FRAME_LEN)) for i in range(HEADER_REPEATS)]
+                pilot_sum = sum(m[HEADER_BIN_OFFSET + c * 8 + 7] for m in mags for c in range(5))
+                if pilot_sum > best_pilot_sum:
+                    best_pilot_sum = pilot_sum
+                    best_valid_offset = test_offset
+        except Exception:
+            continue
+
+    if best_valid_offset is not None:
+        offset = best_valid_offset
+        _log.info("capture_decode: fine-tuned marker offset to sample %d", offset)
+
 
     if offset is None:
         raise ValueError(
@@ -141,7 +165,7 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
             "recording actually contains the played signal."
             % (len(resampled) / SAMPLE_RATE)
         )
-    from header_fft import HEADER_FRAME_LEN, HEADER_REPEATS, read_header_frame, MARKER_LEN
+    
 
     marker_start = offset - MARKER_LEN
     body_start = marker_start + MARKER_LEN  # == offset, just being explicit
