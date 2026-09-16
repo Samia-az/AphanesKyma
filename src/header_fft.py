@@ -112,20 +112,20 @@ def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
     )
     n_chunks = -(-total_data_bits // 4)
 
-    # Calculate median pilot magnitude across all header chunks to establish a noise floor
+    # 1. Calculate median pilot across all 10 chunks to resist narrow frequency nulls
     pilots = [
         magnitude[HEADER_BIN_OFFSET + c * 8 + 7] for c in range(n_chunks)
     ]
     median_pilot = np.median(pilots)
 
-    # Floor the pilot threshold so room nulls do not drop the threshold to zero
-    min_pilot_floor = max(median_pilot * 0.35, 1e-4)
+    # 2. Enforce a minimum pilot floor so acoustic nulls cannot collapse the threshold
+    pilot_floor = max(median_pilot * 0.4, 1e-3)
 
     coded_bits = np.zeros(n_chunks * 7, dtype=int)
     for c in range(n_chunks):
         base = HEADER_BIN_OFFSET + c * 8
         data_slice = magnitude[base : base + 7]
-        pilot = max(magnitude[base + 7], min_pilot_floor)
+        pilot = max(magnitude[base + 7], pilot_floor)
         local_thresh = pilot * threshold_ratio
         coded_bits[c * 7 : (c + 1) * 7] = (data_slice > local_thresh).astype(
             int
@@ -156,30 +156,30 @@ def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
 
 
 def _read_header_majority_vote(audio, offset=0):
-    """Decode each copy independently and take a field-level majority vote across copies."""
-    copies = []
+    """Decode each copy independently, reject implausible fields, and take a field-level majority vote."""
+    valid_copies = []
+
     for i in range(HEADER_REPEATS):
         start = offset + i * HEADER_FRAME_LEN
         segment = audio[start : start + HEADER_FRAME_LEN]
         if len(segment) < HEADER_FRAME_LEN:
             continue
+
         r_rows, r_cols, r_mode, r_rep = read_header_frame(segment)
-        copies.append((r_rows, r_cols, r_mode, r_rep))
 
-    if not copies:
-        return -1, -1, -1, -1
+        # Sanity filter: reject individual copies with impossible dimensions
+        if 1 <= r_rows <= 256 and 2 <= r_cols <= 256 and r_mode in AUDIO_PRESETS:
+            valid_copies.append((r_rows, r_cols, r_mode, r_rep))
 
-    def get_majority(idx):
-        vals = [c[idx] for c in copies]
-        counts = Counter(vals)
-        return counts.most_common(1)[0][0]
+    if not valid_copies:
+        # Fallback decode if no copies passed strict sanity checks
+        return read_header_frame(audio[offset : offset + HEADER_FRAME_LEN])
 
-    return (
-        get_majority(0),
-        get_majority(1),
-        get_majority(2),
-        get_majority(3),
-    )
+    def vote(idx):
+        vals = [c[idx] for c in valid_copies]
+        return Counter(vals).most_common(1)[0][0]
+
+    return vote(0), vote(1), vote(2), vote(3)
 def read_header_frame(frame, threshold_ratio=0.5):
     spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
     return _decode_from_magnitude(np.abs(spectrum), threshold_ratio)
