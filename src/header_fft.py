@@ -32,12 +32,8 @@ HEADER_MODE_BITS = 4            # bits used to encode the audio mode/preset id
 HEADER_DATA_REPEATS_BITS = 4    # bits used to encode data_repeats (1-15)
 HEADER_N_COLS = HEADER_FRAME_LEN // 2 + 1  # rFFT bins available in header frame
 HEADER_REPEATS = 3
-HEADER_AMPLITUDE_SCALE = 0.35
-HEADER_BIN_OFFSET = 32   # ~3000 Hz -- empirically, bins below ~2.6kHz get
-                          # destroyed by the acoustic path (speaker rolloff /
-                          # mic rumble filter / room resonance), even though
-                          # HEADER_N_COLS has plenty of unused headroom above
-                          # where the header actually needs to live.
+HEADER_AMPLITUDE_SCALE = 0.8
+HEADER_BIN_OFFSET = 18   # e 1.5 kHz – 8.5 kHz band where speaker drivers and microphones have peak sensitivity
 MAX_PLAUSIBLE_COLS = 256
 MAX_PLAUSIBLE_ROWS = 256
 
@@ -128,59 +124,52 @@ def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
     )
     n_chunks = -(-total_data_bits // 4)
 
-    # 1. Calculate median pilot across all 10 chunks to resist narrow frequency nulls
-    pilots = [
-        magnitude[HEADER_BIN_OFFSET + c * 8 + 7] for c in range(n_chunks)
-    ]
-    median_pilot = np.median(pilots)
+    # 1. Measure background noise floor from silent bins just below HEADER_BIN_OFFSET
+    noise_region = magnitude[max(0, HEADER_BIN_OFFSET - 12) : HEADER_BIN_OFFSET]
+    noise_floor = np.median(noise_region) if len(noise_region) > 0 else 0.05
 
-    # 2. Enforce a minimum pilot floor so acoustic nulls cannot collapse the threshold
-    pilot_floor = max(median_pilot * 0.4, 1e-3)
+    # 2. Collect pilot tone magnitudes
+    pilots = [magnitude[HEADER_BIN_OFFSET + c * 8 + 7] for c in range(n_chunks)]
+    median_pilot = np.median(pilots)
 
     coded_bits = np.zeros(n_chunks * 7, dtype=int)
     for c in range(n_chunks):
         base = HEADER_BIN_OFFSET + c * 8
         data_slice = magnitude[base : base + 7]
-        pilot = max(magnitude[base + 7], pilot_floor)
-        local_thresh = pilot * threshold_ratio
-        coded_bits[c * 7 : (c + 1) * 7] = (data_slice > local_thresh).astype(
-            int
-        )
+        local_pilot = magnitude[base + 7]
 
-    # Inside _decode_from_magnitude (header_fft.py)
+        # Prevent pilot collapse on high-frequency roll-off
+        effective_pilot = max(local_pilot, median_pilot * 0.4)
+        
+        # Enforce that threshold MUST sit above room noise floor
+        local_thresh = max(effective_pilot * threshold_ratio, noise_floor * 2.5)
+
+        coded_bits[c * 7 : (c + 1) * 7] = (data_slice > local_thresh).astype(int)
+
     bits = hamming_stream_to_bits(coded_bits, n_chunks * 4)
-    
-    # Restore original bit order before parsing values
-    bits = _deinterleave_bits(bits)
-    
+
+    # De-interleave if interleaving is active in your build
+    if '_deinterleave_bits' in globals():
+        bits = _deinterleave_bits(bits)
+
     n_rows = bits_to_int(bits[:HEADER_BITS_PER_VALUE])
     n_cols = bits_to_int(
         bits[HEADER_BITS_PER_VALUE : 2 * HEADER_BITS_PER_VALUE]
     )
     mode_id = bits_to_int(
         bits[
-            2
-            * HEADER_BITS_PER_VALUE : 2
-            * HEADER_BITS_PER_VALUE
-            + HEADER_MODE_BITS
+            2 * HEADER_BITS_PER_VALUE : 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS
         ]
     )
     data_repeats = bits_to_int(
         bits[
-            2 * HEADER_BITS_PER_VALUE
-            + HEADER_MODE_BITS : 2 * HEADER_BITS_PER_VALUE
-            + HEADER_MODE_BITS
-            + HEADER_DATA_REPEATS_BITS
+            2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS : 2 * HEADER_BITS_PER_VALUE + HEADER_MODE_BITS + HEADER_DATA_REPEATS_BITS
         ]
     )
     return n_rows, n_cols, mode_id, data_repeats
 
-
 def _read_header_majority_vote(audio, offset=0):
-    rows_votes = []
-    cols_votes = []
-    mode_votes = []
-    rep_votes = []
+    rows_votes, cols_votes, mode_votes, rep_votes = [], [], [], []
 
     for i in range(HEADER_REPEATS):
         start = offset + i * HEADER_FRAME_LEN
@@ -190,14 +179,14 @@ def _read_header_majority_vote(audio, offset=0):
 
         r_rows, r_cols, r_mode, r_rep = read_header_frame(segment)
 
-        # Vote on valid individual fields rather than discarding the entire copy
-        if 1 <= r_rows <= 256:
+        # Reject impossible values explicitly
+        if 1 <= r_rows <= MAX_PLAUSIBLE_ROWS:
             rows_votes.append(r_rows)
-        if 2 <= r_cols <= 256:
+        if 2 <= r_cols <= MAX_PLAUSIBLE_COLS:
             cols_votes.append(r_cols)
-        if r_mode in AUDIO_PRESETS:
+        if r_mode in AUDIO_PRESETS:  # Only accepts valid preset IDs (0..3)
             mode_votes.append(r_mode)
-        if 1 <= r_rep <= MAX_DATA_REPEATS:
+        if 1 <= r_rep <= MAX_DATA_REPEATS:  # Rejects rep=0 or rep=4+ if out of bounds
             rep_votes.append(r_rep)
 
     fallback_rows, fallback_cols, fallback_mode, fallback_rep = read_header_frame(
