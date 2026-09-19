@@ -67,11 +67,23 @@ DATA_BLOCK_START      = THUMBNAIL_BLOCK_START + THUMBNAIL_BLOCK_LEN
 
 MAX_DATA_REPEATS = (1 << HEADER_DATA_REPEATS_BITS) - 1
 
+_INTERLEAVE_PERM = np.array([
+    0, 16, 32,  1, 17, 33,  2, 18, 34,  3, 19, 35,
+    4, 20, 36,  5, 21, 37,  6, 22, 38,  7, 23, 39,
+    8, 24,  9, 25, 10, 26, 11, 27, 12, 28, 13, 29,
+    14, 30, 15, 31
+])  # Scatters rows, cols, mode, and rep bits evenly
+
 
 # --------------------------------------------------------------------------
 # Header <-> audio frame
 # --------------------------------------------------------------------------
+def _interleave_bits(bits):
+    return bits[_INTERLEAVE_PERM]
 
+def _deinterleave_bits(bits):
+    unshuffle = np.argsort(_INTERLEAVE_PERM)
+    return bits[unshuffle]
 
 
 # --- make_header_frame: add one always-on pilot bin per 7-bit chunk ---
@@ -82,6 +94,10 @@ def make_header_frame(n_rows, n_cols, mode_id=0, data_repeats=1, on_amplitude=40
         int_to_bits(mode_id, HEADER_MODE_BITS),
         int_to_bits(data_repeats, HEADER_DATA_REPEATS_BITS),
     ])
+    
+    # Interleave bits across frequency bins
+    bits = _interleave_bits(bits)
+    
     coded = bits_to_hamming_stream(bits)          # length = n_chunks * 7
     n_chunks = len(coded) // 7
 
@@ -131,7 +147,12 @@ def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
             int
         )
 
+    # Inside _decode_from_magnitude (header_fft.py)
     bits = hamming_stream_to_bits(coded_bits, n_chunks * 4)
+    
+    # Restore original bit order before parsing values
+    bits = _deinterleave_bits(bits)
+    
     n_rows = bits_to_int(bits[:HEADER_BITS_PER_VALUE])
     n_cols = bits_to_int(
         bits[HEADER_BITS_PER_VALUE : 2 * HEADER_BITS_PER_VALUE]
@@ -156,8 +177,10 @@ def _decode_from_magnitude(magnitude, threshold_ratio=0.5):
 
 
 def _read_header_majority_vote(audio, offset=0):
-    """Decode each copy independently, reject implausible fields, and take a field-level majority vote."""
-    valid_copies = []
+    rows_votes = []
+    cols_votes = []
+    mode_votes = []
+    rep_votes = []
 
     for i in range(HEADER_REPEATS):
         start = offset + i * HEADER_FRAME_LEN
@@ -167,19 +190,26 @@ def _read_header_majority_vote(audio, offset=0):
 
         r_rows, r_cols, r_mode, r_rep = read_header_frame(segment)
 
-        # Sanity filter: reject individual copies with impossible dimensions
-        if 1 <= r_rows <= 256 and 2 <= r_cols <= 256 and r_mode in AUDIO_PRESETS:
-            valid_copies.append((r_rows, r_cols, r_mode, r_rep))
+        # Vote on valid individual fields rather than discarding the entire copy
+        if 1 <= r_rows <= 256:
+            rows_votes.append(r_rows)
+        if 2 <= r_cols <= 256:
+            cols_votes.append(r_cols)
+        if r_mode in AUDIO_PRESETS:
+            mode_votes.append(r_mode)
+        if 1 <= r_rep <= MAX_DATA_REPEATS:
+            rep_votes.append(r_rep)
 
-    if not valid_copies:
-        # Fallback decode if no copies passed strict sanity checks
-        return read_header_frame(audio[offset : offset + HEADER_FRAME_LEN])
+    fallback_rows, fallback_cols, fallback_mode, fallback_rep = read_header_frame(
+        audio[offset : offset + HEADER_FRAME_LEN]
+    )
 
-    def vote(idx):
-        vals = [c[idx] for c in valid_copies]
-        return Counter(vals).most_common(1)[0][0]
+    final_rows = Counter(rows_votes).most_common(1)[0][0] if rows_votes else fallback_rows
+    final_cols = Counter(cols_votes).most_common(1)[0][0] if cols_votes else fallback_cols
+    final_mode = Counter(mode_votes).most_common(1)[0][0] if mode_votes else fallback_mode
+    final_rep = Counter(rep_votes).most_common(1)[0][0] if rep_votes else fallback_rep
 
-    return vote(0), vote(1), vote(2), vote(3)
+    return final_rows, final_cols, final_mode, final_rep
 def read_header_frame(frame, threshold_ratio=0.5):
     spectrum = np.fft.rfft(frame, n=HEADER_FRAME_LEN)
     return _decode_from_magnitude(np.abs(spectrum), threshold_ratio)

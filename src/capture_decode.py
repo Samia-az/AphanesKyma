@@ -149,7 +149,7 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
             "Could not locate a valid header marker in the captured audio."
         )
 
-    # Fine-tuning alignment search (now safe from NoneType TypeError)
+    # Fine-tuning alignment search 
     best_valid_offset = None
     best_pilot_sum = -1.0
 
@@ -158,7 +158,8 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     )
     n_chunks = -(-total_data_bits // 4)
 
-    for delta in range(0, 33):
+    # Keep the expanded backwards/forwards search, but restore the decode guardrail
+    for delta in range(-32, 33):
         test_offset = offset + delta
         if (
             test_offset < 0
@@ -167,10 +168,13 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
             continue
 
         try:
+            # Step 1: Decode the bits at this offset
             r_rows, r_cols, r_mode, r_rep = _read_header_majority_vote(
                 resampled, offset=test_offset
             )
             available_data = len(resampled) - test_offset - _BODY_DATA_START
+            
+            # Step 2: ONLY check pilot energy if the decoded bits make logical sense
             if _is_valid_header_fields(
                 r_rows, r_cols, r_mode, r_rep, available_data
             ):
