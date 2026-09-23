@@ -8,7 +8,7 @@ Image preprocessing for the pipeline.
 import numpy as np
 from PIL import Image as PILImage
 
-DEFAULT_MAX_DIMENSION = 512
+DEFAULT_MAX_DIMENSION = 256
 
 
 def resize_for_audio(image_array, max_dimension=DEFAULT_MAX_DIMENSION):

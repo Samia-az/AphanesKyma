@@ -201,8 +201,6 @@ def read_header_frame(frame, threshold_ratio=0.5):
 AUDIO_PRESETS = {
     0: dict(name='fidelity',        strength=0.0, floor=1.00, blur_fraction=None),
     1: dict(name='balanced',        strength=0.6, floor=0.10, blur_fraction=0.05),
-    2: dict(name='listenable',      strength=1.0, floor=0.03, blur_fraction=0.15),
-    3: dict(name='very_listenable', strength=1.3, floor=0.02, blur_fraction=0.30),
 }
 
 

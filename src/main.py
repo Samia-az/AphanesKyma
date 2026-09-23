@@ -4,7 +4,6 @@ import wave
 from imageio.v2 import imread
 
 from image import *
-from DFT2D import *
 from image_audio_fft import *
 from header_fft import *
 from preprocessing import *

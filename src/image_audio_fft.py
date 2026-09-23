@@ -152,7 +152,7 @@ def image_to_audio(image, sample_rate=SAMPLE_RATE, hop=None, phase_seed=0,
     return audio, frm_len
 
 
-# audio to image -- UNCHANGED
+# audio to image
 def audio_to_image(audio, frm_len, hop=None, n_rows=None):
     audio = np.asarray(audio, dtype=np.float64)
     if hop is None:
@@ -178,7 +178,7 @@ def audio_to_image(audio, frm_len, hop=None, n_rows=None):
     return image
 
 
-# helpers -- UNCHANGED
+# helpers
 
 def normalize_image_to_magnitude(image, target_max=50.0):
     image = np.asarray(image, dtype=np.float64)
