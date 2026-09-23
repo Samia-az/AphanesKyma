@@ -282,7 +282,7 @@ def invert_preset(recovered_image, mode_id):
 # Full pipeline
 # --------------------------------------------------------------------------
 
-def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repeats=1):
+def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repeats=1, phase_mode='fixed'):
     """
     Encode image -> audio.
 
@@ -318,7 +318,7 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     expanded_image = np.repeat(processed_image, data_repeats, axis=0)
 
     header = make_header_frame(n_rows, n_cols, mode_id, data_repeats)
-    data_audio, frame_len = image_to_audio(expanded_image, phase_seed=phase_seed)
+    data_audio, frame_len = image_to_audio(expanded_image, phase_seed=phase_seed, phase_mode=phase_mode)
 
     # Rebalance the header's amplitude relative to the data audio's peak
     # (see HEADER_AMPLITUDE_SCALE above for why this specific value, and

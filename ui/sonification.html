@@ -157,6 +157,24 @@
                 </div>
               </div>
 
+              <div class="config-row">
+                <div class="field-group">
+                  <label class="field-label" for="son-phase-mode">
+                    Phase Mode
+                    <span class="field-hint">FFT alignment</span>
+                  </label>
+                  <div class="select-wrapper">
+                    <select id="son-phase-mode" class="field-select">
+                      <option value="fixed" selected>Fixed</option>
+                      <option value="chirp">Chirp</option>
+                      <option value="random_per_row">Random</option>
+                      <option value="minphase">Minphase</option>
+                    </select>
+                    <svg class="select-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+                  </div>
+                </div>
+              </div>
+
               <button class="btn btn-primary btn-large" id="son-encode-btn" type="button">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                 Synthesize Audio Waveform

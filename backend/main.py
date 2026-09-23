@@ -257,7 +257,8 @@ async def api_decode(
 async def api_image_to_audio(
     image: UploadFile = File(...),
     mode: str = Form("listenable"),
-    data_repeats: int = Form(1)
+    data_repeats: int = Form(1),
+    phase_mode: str = Form('fixed')
 ):
     temp_dir = Path(mkdtemp(dir=TMP_DIR))
     try:
@@ -279,7 +280,7 @@ async def api_image_to_audio(
         mag_img = normalize_image_to_magnitude(img_gray)
         
         # Convert to audio
-        audio = image_to_audio_with_header(mag_img, mode=mode, data_repeats=data_repeats)
+        audio = image_to_audio_with_header(mag_img, mode=mode, data_repeats=data_repeats, phase_mode=phase_mode)
         
         # Convert to int16 and save as wav
         audio_int16 = (audio * 32767 * 0.9).astype(np.int16)

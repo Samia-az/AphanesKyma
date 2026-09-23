@@ -326,10 +326,13 @@ function initImageToAudioFlow() {
     errorPanel.hidden = true;
     btn.disabled = true;
 
+    const phaseModeSelect = document.getElementById('son-phase-mode');
+
     const formData = new FormData();
     formData.append('image', imgInput.files[0]);
     formData.append('mode', modeSelect ? modeSelect.value : 'listenable');
     formData.append('data_repeats', repeatsSelect ? repeatsSelect.value : 1);
+    formData.append('phase_mode', phaseModeSelect ? phaseModeSelect.value : 'fixed');
 
     try {
       const response = await fetch('/api/convert/image-to-audio', {
