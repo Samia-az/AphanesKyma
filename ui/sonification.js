@@ -5,7 +5,6 @@
 document.addEventListener('DOMContentLoaded', () => {
   initSonificationTabs();
   initAudioSourceTabs();
-  initColorToggles();
   initSonificationDropZones();
   initDenoiseControls();
   initImageToAudioFlow();
@@ -125,41 +124,6 @@ function initAudioSourceTabs() {
   });
 }
 
-// ── Color / Grayscale Toggles ───────────────────────────────────
-function initColorToggles() {
-  const encGray = document.getElementById('enc-mode-gray');
-  const encColor = document.getElementById('enc-mode-color');
-  const encChroma = document.getElementById('enc-chroma-group');
-
-  if (encGray && encColor) {
-    encGray.addEventListener('click', () => {
-      encGray.classList.add('active');
-      encColor.classList.remove('active');
-      if (encChroma) encChroma.hidden = true;
-    });
-    encColor.addEventListener('click', () => {
-      encColor.classList.add('active');
-      encGray.classList.remove('active');
-      if (encChroma) encChroma.hidden = false;
-    });
-  }
-
-  const decGray = document.getElementById('dec-mode-gray');
-  const decColor = document.getElementById('dec-mode-color');
-  const colorSources = document.getElementById('son-color-sources');
-
-  if (decGray && decColor) {
-    decGray.addEventListener('click', () => {
-      decGray.classList.add('active');
-      decColor.classList.remove('active');
-      if (colorSources) colorSources.hidden = true;
-    });
-    decColor.addEventListener('click', () => {
-      decColor.classList.add('active');
-      decGray.classList.remove('active');
-    });
-  }
-}
 
 // ── Drop Zones for Sonification ─────────────────────────────────
 function initSonificationDropZones() {
@@ -362,23 +326,13 @@ function initImageToAudioFlow() {
     errorPanel.hidden = true;
     btn.disabled = true;
 
-    const encColor = document.getElementById('enc-mode-color');
-    const isColor = encColor && encColor.classList.contains('active');
-
     const formData = new FormData();
     formData.append('image', imgInput.files[0]);
     formData.append('mode', modeSelect ? modeSelect.value : 'listenable');
     formData.append('data_repeats', repeatsSelect ? repeatsSelect.value : 1);
 
-    let endpoint = '/api/convert/image-to-audio';
-    if (isColor) {
-      endpoint = '/api/convert/color-image-to-audio';
-      const chromaSelect = document.getElementById('son-chroma-subsample');
-      formData.append('chroma_subsample', chromaSelect ? chromaSelect.value : 2);
-    }
-
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/convert/image-to-audio', {
         method: 'POST',
         body: formData
       });
@@ -485,19 +439,14 @@ function initAudioToImageFlow() {
     errorPanel.hidden = true;
     btn.disabled = true;
 
-    const decColor = document.getElementById('dec-mode-color');
-    const isColor = decColor && decColor.classList.contains('active');
-
     const formData = new FormData();
     formData.append('audio', audioFileToUpload);
     formData.append('denoise_method', denoiseSelect ? denoiseSelect.value : 'median');
     formData.append('kernel_size', kernelRange ? kernelRange.value : 3);
     formData.append('keep_fraction', fractionRange ? fractionRange.value : 0.35);
 
-    const endpoint = isColor ? '/api/convert/color-audio-to-image' : '/api/convert/audio-to-image';
-
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch('/api/convert/audio-to-image', {
         method: 'POST',
         body: formData
       });
@@ -507,7 +456,7 @@ function initAudioToImageFlow() {
         throw new Error(text || 'Audio to image reconstruction failed');
       }
 
-      const modeName = response.headers.get('X-Decoded-Mode') || (isColor ? 'Color (RGB)' : 'Unknown');
+      const modeName = response.headers.get('X-Decoded-Mode') || 'Unknown';
       const rows = response.headers.get('X-Decoded-Rows') || '?';
       const cols = response.headers.get('X-Decoded-Cols') || '?';
       const decodeSource = response.headers.get('X-Decoded-Source') || 'full';
@@ -517,7 +466,7 @@ function initAudioToImageFlow() {
 
       resultImg.src = imgUrl;
       metaMode.textContent = modeName;
-      metaDims.textContent = (rows === '?' && isColor) ? 'Variable' : `${rows} × ${cols}`;
+      metaDims.textContent = `${rows} × ${cols}`;
 
       const metaSource = document.getElementById('son-meta-source');
       if (metaSource) {
@@ -528,32 +477,6 @@ function initAudioToImageFlow() {
           metaSource.textContent = 'Full Spectrum';
           metaSource.style.color = '#10b981';
         }
-      }
-
-      const colorSources = document.getElementById('son-color-sources');
-      if (isColor && colorSources) {
-        colorSources.hidden = false;
-        const setBadge = (id, src) => {
-          const el = document.getElementById(id);
-          if (el) {
-            el.style.padding = '0.15rem 0.4rem';
-            el.style.borderRadius = '4px';
-            el.style.fontSize = '0.7rem';
-            el.style.fontWeight = '600';
-            if (src === 'full') {
-              el.style.background = 'rgba(16, 185, 129, 0.1)';
-              el.style.color = '#10b981';
-            } else {
-              el.style.background = 'rgba(234, 179, 8, 0.1)';
-              el.style.color = '#eab308';
-            }
-          }
-        };
-        setBadge('src-badge-Y', response.headers.get('X-Color-Source-Y'));
-        setBadge('src-badge-Cb', response.headers.get('X-Color-Source-Cb'));
-        setBadge('src-badge-Cr', response.headers.get('X-Color-Source-Cr'));
-      } else if (colorSources) {
-        colorSources.hidden = true;
       }
 
       placeholder.hidden = true;

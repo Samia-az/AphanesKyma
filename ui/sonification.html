@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=4" />
 </head>
 <body>
 
@@ -80,7 +80,7 @@
     ═══════════════════════════════════════ -->
     <section class="studio-section" style="padding-top: 1rem;">
       <div class="section-container">
-        
+
         <!-- Mode Tabs -->
         <div class="payload-switcher" role="tablist" aria-label="Sonification Mode" style="margin: 0 auto 3rem auto;">
           <button id="tab-img2audio" class="payload-tab active" role="tab" aria-selected="true" aria-controls="pane-img2audio">
@@ -98,7 +98,7 @@
         ═══════════════════════════════════════ -->
         <div id="pane-img2audio" class="payload-pane active">
           <div class="studio-grid">
-            
+
             <!-- Left Inputs -->
             <div class="studio-inputs">
               <div class="field-group">
@@ -125,24 +125,8 @@
                 </div>
               </div>
 
-              <!-- Color / Grayscale mode toggle -->
-              <div class="field-group" style="margin-bottom: 0.6rem;">
-                <label class="field-label">Channel Mode</label>
-                <div class="payload-switcher" style="width:100%; margin-bottom:0;" role="group" aria-label="Channel mode">
-                  <button id="enc-mode-gray" class="payload-tab active" type="button" style="flex:1;">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                    Grayscale
-                  </button>
-                  <button id="enc-mode-color" class="payload-tab" type="button" style="flex:1;">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-                    Color RGB
-                  </button>
-                </div>
-              </div>
-
               <!-- Side-by-side Configuration Sub-modules -->
               <div class="config-row">
-                <!-- Preset selection dropdown -->
                 <div class="field-group">
                   <label class="field-label" for="son-audio-mode">
                     Audio Fidelity
@@ -159,7 +143,6 @@
                   </div>
                 </div>
 
-                <!-- Data Repeats / Robustness dropdown -->
                 <div class="field-group">
                   <label class="field-label" for="son-data-repeats">
                     Data Repeats
@@ -177,22 +160,6 @@
                 </div>
               </div>
 
-              <!-- Chroma subsample (color mode only) -->
-              <div class="field-group" id="enc-chroma-group" hidden>
-                <label class="field-label" for="son-chroma-subsample">
-                  Chroma Subsample
-                  <span class="field-hint">Cb/Cr resolution</span>
-                </label>
-                <div class="select-wrapper">
-                  <select id="son-chroma-subsample" class="field-select">
-                    <option value="2" selected>2× — Half (recommended)</option>
-                    <option value="1">1× — Full (3× audio length)</option>
-                    <option value="4">4× — Quarter (fastest)</option>
-                  </select>
-                  <svg class="select-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-                </div>
-              </div>
-
               <button class="btn btn-primary btn-large" id="son-encode-btn" type="button">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                 Synthesize Audio Waveform
@@ -206,7 +173,7 @@
                   <div class="placeholder-icon">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
                   </div>
-                  <p>Audio waveform player will appear here</p>
+                  <p>Audio will be available here</p>
                 </div>
 
                 <div class="encode-result" id="son-encode-result" hidden style="width: 100%;">
@@ -246,24 +213,9 @@
         ═══════════════════════════════════════ -->
         <div id="pane-audio2img" class="payload-pane" hidden>
           <div class="studio-grid">
-            
+
             <!-- Left Inputs -->
             <div class="studio-inputs">
-
-              <!-- Color / Grayscale mode toggle -->
-              <div class="field-group" style="margin-bottom: 0.6rem;">
-                <label class="field-label">Channel Mode</label>
-                <div class="payload-switcher" style="width:100%; margin-bottom:0;" role="group" aria-label="Decode channel mode">
-                  <button id="dec-mode-gray" class="payload-tab active" type="button" style="flex:1;">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                    Grayscale
-                  </button>
-                  <button id="dec-mode-color" class="payload-tab" type="button" style="flex:1;">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/><line x1="2" y1="12" x2="22" y2="12"/></svg>
-                    Color RGB
-                  </button>
-                </div>
-              </div>
 
               <!-- Source Selection (File Upload vs Live Mic Record) -->
               <div class="field-group">
@@ -307,17 +259,17 @@
                   </div>
                   <h4 id="mic-status-text" style="color: var(--text-1); font-size: 0.875rem; font-weight: 600;">Microphone Idle</h4>
                   <p id="mic-timer-text" style="font-family: 'JetBrains Mono', monospace; color: var(--teal); font-size: 0.95rem; margin: 0.25rem 0 0.75rem;">00:00</p>
-                  
+
                   <div style="display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap;">
                     <button class="btn btn-primary" id="btn-mic-record" type="button">Start Recording</button>
                     <button class="btn btn-ghost" id="btn-mic-stop" type="button" disabled>Stop</button>
                   </div>
-                  
+
                   <label style="font-size: 0.75rem; color: var(--text-2); display: flex; align-items: center; gap: 0.4rem; justify-content: center; margin-top: 0.5rem; cursor: pointer;">
                     <input type="checkbox" id="chk-auto-play-source" checked style="accent-color: var(--teal);" />
                     Auto-play generated audio during recording
                   </label>
-                  
+
                   <div id="mic-playback-wrap" hidden style="margin-top: 0.85rem;">
                     <p style="font-size: 0.75rem; color: var(--text-2); margin-bottom: 0.35rem;">Recorded Audio Preview:</p>
                     <audio id="mic-audio-preview" controls style="width: 100%; outline: none; border-radius: 6px;"></audio>
@@ -410,7 +362,7 @@
                   <div class="placeholder-icon">
                     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity="0.4"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
                   </div>
-                  <p>Reconstructed image will appear here</p>
+                  <p>Image will be available here</p>
                 </div>
 
                 <div class="decode-result-image" id="son-decode-result" hidden style="width: 100%;">
@@ -438,14 +390,6 @@
                       <span class="metric-label">Decode Source</span>
                       <span class="metric-value" id="son-meta-source">—</span>
                     </div>
-                  </div>
-
-                  <!-- Channel source badges (visible only in color mode) -->
-                  <div id="son-color-sources" hidden style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
-                    <span style="font-size: 0.72rem; color: var(--text-2); align-self: center;">Channels:</span>
-                    <span class="channel-badge" id="src-badge-Y">Y</span>
-                    <span class="channel-badge" id="src-badge-Cb">Cb</span>
-                    <span class="channel-badge" id="src-badge-Cr">Cr</span>
                   </div>
 
                   <button class="btn btn-decode" id="son-img-download" type="button" style="width: 100%;">
@@ -479,7 +423,7 @@
     </div>
   </footer>
 
-  <script src="app.js?v=2"></script>
-  <script src="sonification.js?v=2"></script>
+  <script src="app.js?v=3"></script>
+  <script src="sonification.js?v=3"></script>
 </body>
 </html>
