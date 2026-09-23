@@ -45,11 +45,10 @@ from header_fft import (
     _is_valid_header_fields,
     audio_with_header_to_image,
     _decode_body,
-    THUMBNAIL_BLOCK_LEN,
     read_header_frame, MARKER_LEN 
 )
 
-_BODY_DATA_START = HEADER_FRAME_LEN * HEADER_REPEATS + THUMBNAIL_BLOCK_LEN
+_BODY_DATA_START = HEADER_FRAME_LEN * HEADER_REPEATS
 
 
 def resample_to_target_rate(audio, native_rate, target_rate=SAMPLE_RATE):
@@ -100,13 +99,12 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
                    If the bounded search fails, a full-recording scan is
                    attempted automatically before giving up.
 
-    Returns whatever audio_with_header_to_image() returns: (image,
-    n_rows, n_cols, mode_name, source), where source is 'full' or
-    'thumbnail_fallback' -- see that function's docstring in
-    header_fft.py. Only raises if the header block itself couldn't even
-    be LOCATED (see find_header_offset above); if it's located but its
-    *contents* are too corrupted to trust, this falls back to the small
-    protected thumbnail automatically rather than raising.
+    Returns whatever _decode_body() returns: (image,
+    n_rows, n_cols, mode_name, source), where source is 'full'.
+    Only raises if the header block itself couldn't even
+    be LOCATED (see find_header_offset above).
+
+    Raises ValueError if no header alignment could be located at all.
 
     Raises ValueError if no header alignment could be located at all.
     """
@@ -241,6 +239,6 @@ def decode_captured_audio(raw_audio, native_rate, search_seconds=5.0):
     # audio_with_header_to_image() expects audio that STILL has the
     # marker at sample 0 and strips MARKER_LEN itself; calling it here
     # used to skip an extra MARKER_LEN samples past the real header and
-    # into the thumbnail block. _decode_body() is the marker-agnostic
+    # into the data block. _decode_body() is the marker-agnostic
     # half of that function -- call it directly on already-stripped audio.
     return _decode_body(resampled[offset:])

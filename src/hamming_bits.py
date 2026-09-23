@@ -3,7 +3,7 @@ hamming_bits.py
 -----------------
 Hamming(7,4) single-bit-error-correcting code, plus small bit-packing
 helpers, shared by header_fft.py (the main header) and
-thumbnail_channel.py (the low-res fallback channel). Split out into its
+header_fft.py (the main header). Split out into its
 own module purely so those two can both use it without importing each
 other.
 """

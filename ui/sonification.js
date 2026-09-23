@@ -459,7 +459,6 @@ function initAudioToImageFlow() {
       const modeName = response.headers.get('X-Decoded-Mode') || 'Unknown';
       const rows = response.headers.get('X-Decoded-Rows') || '?';
       const cols = response.headers.get('X-Decoded-Cols') || '?';
-      const decodeSource = response.headers.get('X-Decoded-Source') || 'full';
 
       const blob = await response.blob();
       const imgUrl = URL.createObjectURL(blob);
@@ -467,17 +466,6 @@ function initAudioToImageFlow() {
       resultImg.src = imgUrl;
       metaMode.textContent = modeName;
       metaDims.textContent = `${rows} × ${cols}`;
-
-      const metaSource = document.getElementById('son-meta-source');
-      if (metaSource) {
-        if (decodeSource === 'thumbnail_fallback') {
-          metaSource.textContent = 'Thumbnail (Fallback)';
-          metaSource.style.color = '#eab308';
-        } else {
-          metaSource.textContent = 'Full Spectrum';
-          metaSource.style.color = '#10b981';
-        }
-      }
 
       placeholder.hidden = true;
       resultPanel.hidden = false;

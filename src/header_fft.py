@@ -14,17 +14,8 @@ header-only scheme:
     (expanded) image to image_to_audio(), and the decoder collapses
     each group of `data_repeats` decoded frames back into one row via a
     per-bin MEDIAN across the group -- the continuous-valued analogue
-    of the header's own bit-level majority voting, since data rows
     carry real magnitude values rather than discrete bits. Raises the
-    *typical* quality of a successful decode; see thumbnail_channel.py
-    for the complementary guarantee.
-
-  - thumbnail fallback: a small, independently-decodable, heavily
-    protected preview (see thumbnail_channel.py) is transmitted right
-    after the main header. If the main header can't be validated,
-    audio_with_header_to_image() automatically falls back to that
-    preview instead of raising -- a probability FLOOR on getting some
-    recognizable image back, distinct from data_repeats' quality boost.
+    *typical* quality of a successful decode.
 """
 HEADER_FRAME_LEN = 512          # fixed & known
 HEADER_BITS_PER_VALUE = 16      # bits used to encode each of n_rows, n_cols
@@ -46,20 +37,14 @@ from hamming_bits import (
     bits_to_hamming_stream, hamming_stream_to_bits,
     int_to_bits, bits_to_int,
 )
-from thumbnail_channel import (
-    THUMBNAIL_DIM, THUMBNAIL_FRAME_LEN, THUMBNAIL_REPEATS,
-    build_thumbnail_block, decode_thumbnail_block,
-)
 
 
 
 # Audio layout (sample offsets, all at SAMPLE_RATE):
-#   [marker : MARKER_LEN] + [header × HEADER_REPEATS] + [thumbnail × THUMBNAIL_REPEATS] + [data]
+#   [marker : MARKER_LEN] + [header × HEADER_REPEATS] + [data]
 MARKER_BLOCK_START    = 0
 HEADER_BLOCK_START    = MARKER_LEN
-THUMBNAIL_BLOCK_START = MARKER_LEN + HEADER_FRAME_LEN * HEADER_REPEATS
-THUMBNAIL_BLOCK_LEN   = THUMBNAIL_FRAME_LEN * THUMBNAIL_REPEATS
-DATA_BLOCK_START      = THUMBNAIL_BLOCK_START + THUMBNAIL_BLOCK_LEN
+DATA_BLOCK_START      = MARKER_LEN + HEADER_FRAME_LEN * HEADER_REPEATS
 
 MAX_DATA_REPEATS = (1 << HEADER_DATA_REPEATS_BITS) - 1
 
@@ -302,8 +287,7 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     Encode image -> audio.
 
     mode : str or int
-        One of AUDIO_PRESETS' names ('fidelity', 'balanced',
-        'listenable', 'very_listenable') or its integer id.
+        One of AUDIO_PRESETS' names ('fidelity', 'balanced') or its integer id.
     data_repeats : int, 1..MAX_DATA_REPEATS
         How many times to transmit each data row. 1 = original
         behavior (no repetition). >1 repeats every row that many times
@@ -314,7 +298,7 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
         cost of `data_repeats`x longer audio. Stored in the header, so
         the decoder needs no external knowledge of it.
 
-    Audio layout: [header x HEADER_REPEATS] + [thumbnail x THUMBNAIL_REPEATS]
+    Audio layout: [header x HEADER_REPEATS]
     + [data audio, built from data_repeats-times-repeated rows].
     """
     if isinstance(mode, str):
@@ -340,8 +324,6 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     # (see HEADER_AMPLITUDE_SCALE above for why this specific value, and
     # why it can't simply be "as loud as possible" or "as quiet as
     # possible" -- it trades off AWGN robustness against clipping
-    # robustness). The thumbnail block gets the same treatment, via
-    # THUMBNAIL_AMPLITUDE_SCALE in thumbnail_channel.py.
     header_peak = np.abs(header).max()
     data_peak = np.abs(data_audio).max()
     marker = make_marker()
@@ -351,8 +333,6 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     if header_peak > 0 and data_peak > 0:
         header = header * (data_peak / header_peak) * HEADER_AMPLITUDE_SCALE
 
-    thumbnail_block = build_thumbnail_block(image, data_peak_for_scaling=data_peak)
-
     # Repeat the header HEADER_REPEATS times. Each copy is decoded
     # independently at read time and the results are majority-voted --
     # a second, independent layer of protection on top of Hamming(7,4),
@@ -361,11 +341,11 @@ def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repe
     # rebalancing (a short, sparse pattern has more of its own samples
     # sitting near peak amplitude than the spread-out data audio does).
     audio_layout = (
-        "[marker:%d] + [header×%d] + [thumbnail×%d] + [data]"
-        % (MARKER_LEN, HEADER_REPEATS, THUMBNAIL_REPEATS)
+        "[marker:%d] + [header×%d] + [data]"
+        % (MARKER_LEN, HEADER_REPEATS)
     )
     full_audio = np.concatenate(
-        [marker] + [header] * HEADER_REPEATS + [thumbnail_block, data_audio]
+        [marker] + [header] * HEADER_REPEATS + [data_audio]
     )
 
     peak = np.max(np.abs(full_audio))
@@ -397,7 +377,6 @@ def audio_with_header_to_image(audio):
     Expected audio layout (from sample 0 of the WAV):
       [marker : MARKER_LEN]
       [header frame × HEADER_REPEATS : HEADER_FRAME_LEN each]
-      [thumbnail block : THUMBNAIL_BLOCK_LEN]
       [data audio]
 
     For captured audio -- where marker.find_marker_offset() has already
@@ -406,13 +385,11 @@ def audio_with_header_to_image(audio):
     `resampled[offset:]` where offset is find_marker_offset()'s return
     value). Do NOT pass that here: this function strips another
     MARKER_LEN samples internally, which would skip straight past the
-    real header into the thumbnail block. That mismatch was the actual
     bug behind the corrupted capture-decode header reads -- see
     capture_decode.py.
 
     Returns (image, n_rows, n_cols, mode_name, source).
       source='full'               -- full data channel decoded.
-      source='thumbnail_fallback' -- fell back to thumbnail preview.
     """
     # Strip marker; everything below is in body-relative coordinates.
     return _decode_body(audio[MARKER_LEN:])
@@ -428,11 +405,9 @@ def _decode_body(body):
 
     Body layout:
       [0 .. HEADER_FRAME_LEN*HEADER_REPEATS)   -- header copies
-      [HEADER_FRAME_LEN*HEADER_REPEATS ..)      -- thumbnail block
-      [HEADER_FRAME_LEN*HEADER_REPEATS + THUMBNAIL_BLOCK_LEN ..) -- data
+      [HEADER_FRAME_LEN*HEADER_REPEATS ..)      -- data
     """
-    _BODY_THUMBNAIL_START = HEADER_FRAME_LEN * HEADER_REPEATS
-    _BODY_DATA_START      = _BODY_THUMBNAIL_START + THUMBNAIL_BLOCK_LEN
+    _BODY_DATA_START = HEADER_FRAME_LEN * HEADER_REPEATS
 
     n_rows, n_cols, mode_id, data_repeats = _read_header_majority_vote(body)
 
@@ -452,9 +427,7 @@ def _decode_body(body):
         mode_name = AUDIO_PRESETS.get(mode_id, {}).get('name', f'unknown({mode_id})')
         return image, n_rows, n_cols, mode_name, 'full'
 
-    # Main header failed -- fall back to the thumbnail.
-    thumbnail = decode_thumbnail_block(body, offset=_BODY_THUMBNAIL_START)
-    return thumbnail, THUMBNAIL_DIM, THUMBNAIL_DIM, 'thumbnail_fallback', 'thumbnail_fallback'
+    raise ValueError("Failed to decode header.")
 
 # NOTE: a second _read_header_majority_vote used to be defined here, doing
 # per-copy decode + per-field Counter-based majority voting. It silently

@@ -347,14 +347,6 @@ async def api_audio_to_image(
         # Try clean header decode first, fallback to capture decode if needed
         try:
             img_matrix, n_rows, n_cols, mode_name, source = audio_with_header_to_image(samples)
-            if source == 'thumbnail_fallback':
-                logger.info("Clean decode returned thumbnail_fallback, attempting capture decode...")
-                try:
-                    cap_img_matrix, cap_n_rows, cap_n_cols, cap_mode_name, cap_source = decode_captured_audio(samples, native_rate=framerate)
-                    if cap_source == 'full':
-                        img_matrix, n_rows, n_cols, mode_name, source = cap_img_matrix, cap_n_rows, cap_n_cols, cap_mode_name, cap_source
-                except Exception as err_cap:
-                    logger.info("Capture decode attempt failed (%s), keeping thumbnail fallback.", err_cap)
         except Exception as err_clean:
             logger.info("Clean decode failed (%s), attempting capture decode...", err_clean)
             img_matrix, n_rows, n_cols, mode_name, source = decode_captured_audio(samples, native_rate=framerate)
