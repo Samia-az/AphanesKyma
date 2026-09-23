@@ -272,7 +272,8 @@ async def api_image_to_audio(
         # Read and process image
         img_array = imread(str(image_path))
         if img_array.ndim == 3:
-            img_gray = img_array[:,:,0].astype(np.float64)
+            # Multiply RGB channels by perceptual luminance weights (and ignore alpha if present)
+            img_gray = (img_array[:, :, :3] @ [0.299, 0.587, 0.114]).astype(np.float64)
         else:
             img_gray = img_array.astype(np.float64)
 
