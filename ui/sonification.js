@@ -5,6 +5,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   initSonificationTabs();
   initAudioSourceTabs();
+  initColorToggles();
   initSonificationDropZones();
   initDenoiseControls();
   initImageToAudioFlow();
@@ -112,6 +113,7 @@ function initAudioSourceTabs() {
     srcTabMic.classList.remove('active');
     srcPaneFile.hidden = false;
     srcPaneMic.hidden = true;
+    resetDecodeOutput();
   });
 
   srcTabMic.addEventListener('click', () => {
@@ -119,7 +121,44 @@ function initAudioSourceTabs() {
     srcTabFile.classList.remove('active');
     srcPaneMic.hidden = false;
     srcPaneFile.hidden = true;
+    resetDecodeOutput();
   });
+}
+
+// ── Color / Grayscale Toggles ───────────────────────────────────
+function initColorToggles() {
+  const encGray = document.getElementById('enc-mode-gray');
+  const encColor = document.getElementById('enc-mode-color');
+  const encChroma = document.getElementById('enc-chroma-group');
+
+  if (encGray && encColor) {
+    encGray.addEventListener('click', () => {
+      encGray.classList.add('active');
+      encColor.classList.remove('active');
+      if (encChroma) encChroma.hidden = true;
+    });
+    encColor.addEventListener('click', () => {
+      encColor.classList.add('active');
+      encGray.classList.remove('active');
+      if (encChroma) encChroma.hidden = false;
+    });
+  }
+
+  const decGray = document.getElementById('dec-mode-gray');
+  const decColor = document.getElementById('dec-mode-color');
+  const colorSources = document.getElementById('son-color-sources');
+
+  if (decGray && decColor) {
+    decGray.addEventListener('click', () => {
+      decGray.classList.add('active');
+      decColor.classList.remove('active');
+      if (colorSources) colorSources.hidden = true;
+    });
+    decColor.addEventListener('click', () => {
+      decColor.classList.add('active');
+      decGray.classList.remove('active');
+    });
+  }
 }
 
 // ── Drop Zones for Sonification ─────────────────────────────────
@@ -133,7 +172,8 @@ function initSonificationDropZones() {
     img: 'son-image-img',
     info: 'son-image-info',
     change: 'son-image-change',
-    isImage: true
+    isImage: true,
+    onInputChanged: resetEncodeOutput
   });
 
   // WAV audio dropzone
@@ -144,7 +184,8 @@ function initSonificationDropZones() {
     preview: 'son-wav-preview',
     info: 'son-wav-info',
     change: 'son-wav-change',
-    isImage: false
+    isImage: false,
+    onInputChanged: resetDecodeOutput
   });
 }
 
@@ -192,6 +233,8 @@ function setupDropZone(config) {
     inputEl.value = '';
     idleEl.hidden = false;
     previewEl.hidden = true;
+    // Input cleared → no input, so the output goes back to its idle placeholder
+    config.onInputChanged?.();
   });
 }
 
@@ -213,6 +256,8 @@ function handleSelectedFile(file, config) {
       infoEl.textContent = `${file.name} (${kb} KB)`;
       idleEl.hidden = true;
       previewEl.hidden = false;
+      // New input selected → any previous output no longer matches it
+      config.onInputChanged?.();
     };
     reader.readAsDataURL(file);
   } else {
@@ -221,7 +266,34 @@ function handleSelectedFile(file, config) {
     infoEl.textContent = `${file.name} (${kb} KB)`;
     idleEl.hidden = true;
     previewEl.hidden = false;
+    // New input selected → any previous output no longer matches it
+    config.onInputChanged?.();
   }
+}
+
+// ── Output Panel State Helpers ───────────────────────────────────
+// The output card always reflects the *current* input: with no
+// input (or a freshly-changed input that hasn't been converted yet)
+// it shows the idle placeholder; a success or error state is only
+// ever shown for the conversion that was just run on that input.
+function resetEncodeOutput() {
+  const placeholder = document.getElementById('son-encode-placeholder');
+  const resultPanel = document.getElementById('son-encode-result');
+  const errorPanel = document.getElementById('son-encode-error');
+  if (!placeholder) return;
+  placeholder.hidden = false;
+  resultPanel.hidden = true;
+  errorPanel.hidden = true;
+}
+
+function resetDecodeOutput() {
+  const placeholder = document.getElementById('son-decode-placeholder');
+  const resultPanel = document.getElementById('son-decode-result');
+  const errorPanel = document.getElementById('son-decode-error');
+  if (!placeholder) return;
+  placeholder.hidden = false;
+  resultPanel.hidden = true;
+  errorPanel.hidden = true;
 }
 
 // ── Denoise Filter Sliders & Toggle ──────────────────────────────
@@ -290,13 +362,23 @@ function initImageToAudioFlow() {
     errorPanel.hidden = true;
     btn.disabled = true;
 
+    const encColor = document.getElementById('enc-mode-color');
+    const isColor = encColor && encColor.classList.contains('active');
+
     const formData = new FormData();
     formData.append('image', imgInput.files[0]);
     formData.append('mode', modeSelect ? modeSelect.value : 'listenable');
     formData.append('data_repeats', repeatsSelect ? repeatsSelect.value : 1);
 
+    let endpoint = '/api/convert/image-to-audio';
+    if (isColor) {
+      endpoint = '/api/convert/color-image-to-audio';
+      const chromaSelect = document.getElementById('son-chroma-subsample');
+      formData.append('chroma_subsample', chromaSelect ? chromaSelect.value : 2);
+    }
+
     try {
-      const response = await fetch('/api/convert/image-to-audio', {
+      const response = await fetch(endpoint, {
         method: 'POST',
         body: formData
       });
@@ -339,7 +421,8 @@ function initImageToAudioFlow() {
             preview: 'son-wav-preview',
             info: 'son-wav-info',
             change: 'son-wav-change',
-            isImage: false
+            isImage: false,
+            onInputChanged: resetDecodeOutput
           });
 
           // Switch to Audio to Image tab & File sub-tab
@@ -402,14 +485,19 @@ function initAudioToImageFlow() {
     errorPanel.hidden = true;
     btn.disabled = true;
 
+    const decColor = document.getElementById('dec-mode-color');
+    const isColor = decColor && decColor.classList.contains('active');
+
     const formData = new FormData();
     formData.append('audio', audioFileToUpload);
     formData.append('denoise_method', denoiseSelect ? denoiseSelect.value : 'median');
     formData.append('kernel_size', kernelRange ? kernelRange.value : 3);
     formData.append('keep_fraction', fractionRange ? fractionRange.value : 0.35);
 
+    const endpoint = isColor ? '/api/convert/color-audio-to-image' : '/api/convert/audio-to-image';
+
     try {
-      const response = await fetch('/api/convert/audio-to-image', {
+      const response = await fetch(endpoint, {
         method: 'POST',
         body: formData
       });
@@ -419,7 +507,7 @@ function initAudioToImageFlow() {
         throw new Error(text || 'Audio to image reconstruction failed');
       }
 
-      const modeName = response.headers.get('X-Decoded-Mode') || 'Unknown';
+      const modeName = response.headers.get('X-Decoded-Mode') || (isColor ? 'Color (RGB)' : 'Unknown');
       const rows = response.headers.get('X-Decoded-Rows') || '?';
       const cols = response.headers.get('X-Decoded-Cols') || '?';
       const decodeSource = response.headers.get('X-Decoded-Source') || 'full';
@@ -429,7 +517,7 @@ function initAudioToImageFlow() {
 
       resultImg.src = imgUrl;
       metaMode.textContent = modeName;
-      metaDims.textContent = `${rows} × ${cols}`;
+      metaDims.textContent = (rows === '?' && isColor) ? 'Variable' : `${rows} × ${cols}`;
 
       const metaSource = document.getElementById('son-meta-source');
       if (metaSource) {
@@ -440,6 +528,32 @@ function initAudioToImageFlow() {
           metaSource.textContent = 'Full Spectrum';
           metaSource.style.color = '#10b981';
         }
+      }
+
+      const colorSources = document.getElementById('son-color-sources');
+      if (isColor && colorSources) {
+        colorSources.hidden = false;
+        const setBadge = (id, src) => {
+          const el = document.getElementById(id);
+          if (el) {
+            el.style.padding = '0.15rem 0.4rem';
+            el.style.borderRadius = '4px';
+            el.style.fontSize = '0.7rem';
+            el.style.fontWeight = '600';
+            if (src === 'full') {
+              el.style.background = 'rgba(16, 185, 129, 0.1)';
+              el.style.color = '#10b981';
+            } else {
+              el.style.background = 'rgba(234, 179, 8, 0.1)';
+              el.style.color = '#eab308';
+            }
+          }
+        };
+        setBadge('src-badge-Y', response.headers.get('X-Color-Source-Y'));
+        setBadge('src-badge-Cb', response.headers.get('X-Color-Source-Cb'));
+        setBadge('src-badge-Cr', response.headers.get('X-Color-Source-Cr'));
+      } else if (colorSources) {
+        colorSources.hidden = true;
       }
 
       placeholder.hidden = true;
@@ -490,6 +604,9 @@ function initLiveMicRecorder() {
   // ── Start recording ──────────────────────────────────────────
   btnRecord.addEventListener('click', async () => {
     if (workletIsRecording) return;
+
+    // Starting a fresh recording invalidates any previous decode result/error
+    resetDecodeOutput();
 
     try {
       // ① Request raw mic access (disable browser DSP)
@@ -686,6 +803,10 @@ function updateAudioTrim() {
   liveRecordedBlob = encodePCM16Wav(trimmedSamples, rawRecordedSampleRate);
   audioPreview.src = URL.createObjectURL(liveRecordedBlob);
   audioPreview.load();
+
+  // Trimming changes the audio that would be decoded, so any previous
+  // decode result/error no longer applies to the current input
+  resetDecodeOutput();
 }
 
 // ── Pure JS PCM 16-bit WAV Encoder ──────────────────────────────
