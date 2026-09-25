@@ -280,7 +280,7 @@ def invert_preset(recovered_image, mode_id):
 # Full pipeline
 # --------------------------------------------------------------------------
 
-def image_to_audio_with_header(image, mode='listenable', phase_seed=0, data_repeats=1, phase_mode='fixed'):
+def image_to_audio_with_header(image, mode='fidelity', phase_seed=0, data_repeats=1, phase_mode='fixed'):
     """
     Encode image -> audio.
 

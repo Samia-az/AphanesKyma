@@ -197,16 +197,22 @@ function setupDropZone(config) {
     inputEl.value = '';
     idleEl.hidden = false;
     previewEl.hidden = true;
+    // Restore the drop zone's default appearance
+    zoneEl.style.padding = '';
+    zoneEl.style.minHeight = '';
+    zoneEl.style.height = '';
+    zoneEl.style.alignItems = '';
     // Input cleared → no input, so the output goes back to its idle placeholder
     config.onInputChanged?.();
   });
 }
 
 function handleSelectedFile(file, config) {
-  const idleEl = document.getElementById(config.idle);
+  const zoneEl    = document.getElementById(config.zone);
+  const idleEl    = document.getElementById(config.idle);
   const previewEl = document.getElementById(config.preview);
-  const infoEl = document.getElementById(config.info);
-  const imgEl = config.img ? document.getElementById(config.img) : null;
+  const infoEl    = document.getElementById(config.info);
+  const imgEl     = config.img ? document.getElementById(config.img) : null;
 
   if (config.isImage) {
     if (!file.type.startsWith('image/')) {
@@ -215,7 +221,18 @@ function handleSelectedFile(file, config) {
     }
     const reader = new FileReader();
     reader.onload = (e) => {
-      if (imgEl) imgEl.src = e.target.result;
+      if (imgEl) {
+        imgEl.src = e.target.result;
+        // Once the image's natural dimensions are known, resize the zone to fit
+        imgEl.onload = () => {
+          if (zoneEl) {
+            zoneEl.style.padding    = '0';
+            zoneEl.style.minHeight  = '0';
+            zoneEl.style.height     = 'auto';
+            zoneEl.style.alignItems = 'flex-start';
+          }
+        };
+      }
       const kb = (file.size / 1024).toFixed(1);
       infoEl.textContent = `${file.name} (${kb} KB)`;
       idleEl.hidden = true;

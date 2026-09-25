@@ -698,18 +698,25 @@ body {
 
 /* Drop preview */
 .drop-preview {
-  position: absolute;
-  inset: 0;
+  position: relative;   /* was absolute – now expands the drop zone */
+  width: 100%;
   display: flex;
   flex-direction: column;
 }
 .drop-preview img {
   width: 100%;
-  height: 100%;
-  object-fit: cover;
+  height: auto;
+  display: block;
+  object-fit: contain;
   border-radius: calc(var(--radius-lg) - 2px);
 }
 .drop-preview.small img { border-radius: calc(var(--radius-lg) - 2px); }
+
+/* Shrink the drop zone to hug the image when a preview is active */
+.drop-zone:has(.drop-preview:not([hidden])) {
+  padding: 0;
+  min-height: 0;
+}
 
 .preview-overlay {
   position: absolute;
@@ -793,7 +800,6 @@ body {
   padding: 2rem;
   gap: 1.5rem;
   position: relative;
-  overflow: hidden;
 }
 
 .output-placeholder {
@@ -894,7 +900,14 @@ body {
 }
 
 .result-image-wrap { position: relative; border-radius: var(--radius-lg); overflow: hidden; }
-.result-image { width: 100%; border-radius: var(--radius-lg); display: block; max-height: 300px; object-fit: cover; }
+.result-image {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  border-radius: var(--radius-lg);
+  display: block;
+  object-fit: contain;
+}
 .result-image:not([src]), .result-image[src=""] { display: none !important; }
 
 .result-badge {
